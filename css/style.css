@@ -150,14 +150,15 @@ select, input[type="text"] {
 .stage.no-video video { opacity: 0; }
 .stage.is-recording { outline: 3px solid var(--rec); outline-offset: -3px; }
 .hud { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 0.9rem; pointer-events: none; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
-.hud-top { display: flex; justify-content: space-between; align-items: center; }
+.hud-top { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.4rem; }
+.hud-top .rec-badge { margin-right: auto; }
 .hud-center { display: grid; place-items: center; }
 .hud-bottom { display: flex; flex-direction: column; gap: 0.5rem; }
 .rec-badge { background: rgba(0, 0, 0, 0.55); color: #fff; padding: 0.3rem 0.7rem; border-radius: 999px; font-weight: 600; letter-spacing: 0.02em; }
 .rec-badge .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--rec); margin-right: 0.4rem; animation: blink 1s steps(2) infinite; vertical-align: -1px; }
 @keyframes blink { 50% { opacity: 0.25; } }
 .fps { margin-left: auto; font-size: 0.8rem; opacity: 0.85; font-variant-numeric: tabular-nums; }
-.hud-tools { display: flex; gap: 0.4rem; margin-left: 0.75rem; pointer-events: auto; }
+.hud-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.4rem; margin-left: 0.35rem; pointer-events: auto; }
 .hud-btn {
   background: rgba(0, 0, 0, 0.55); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 8px;
   padding: 0.3rem 0.6rem; font: inherit; font-size: 0.85rem; cursor: pointer; text-shadow: none;
