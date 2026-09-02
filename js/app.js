@@ -70,6 +70,9 @@ function setStatus(msg) {
 }
 
 function setView(name) {
+  // The camera stage may be fullscreen; leaving it in the top layer over a hidden view
+  // would block every click on the dashboard, so always drop out of fullscreen first.
+  if (name !== 'live' && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   state.view = name;
   for (const [k, el] of Object.entries(ui.views)) el.hidden = k !== name;
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('is-active', b.dataset.view === name));
