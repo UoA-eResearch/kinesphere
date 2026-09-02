@@ -25,7 +25,7 @@
   <main>
     <section id="view-live" class="view">
       <div class="stage-wrap">
-        <div class="stage" id="stage">
+        <div class="stage is-idle" id="stage">
           <video id="video" playsinline muted autoplay></video>
           <canvas id="overlay"></canvas>
           <div class="hud">
@@ -50,6 +50,7 @@
             <h1>Record a dance session</h1>
             <p>Your webcam feed and detected pose are shown here. Video never leaves your device; only pose landmarks are recorded.</p>
             <button id="btn-camera" class="btn btn-primary">Start camera</button>
+            <div id="camera-status" class="placeholder-status" hidden></div>
             <div id="camera-error" class="error-box" hidden></div>
           </div>
         </div>

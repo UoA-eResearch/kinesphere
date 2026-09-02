@@ -17,6 +17,7 @@ const THEME_KEY = 'kinesphere:theme';
 const OVERLAY_KEY = 'kinesphere:overlay';
 const CAMERA_KEY = 'kinesphere:camera';
 const STYLE_KEY = 'kinesphere:style';
+const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
 const TEMPLATE_POSE = [
@@ -26,7 +27,7 @@ const TEMPLATE_POSE = [
 
 const ui = {
   video: $('#video'), canvas: $('#overlay'), stage: $('#stage'), placeholder: $('#stage-placeholder'),
-  cameraError: $('#camera-error'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
+  cameraError: $('#camera-error'), cameraStatus: $('#camera-status'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
   chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'), status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
@@ -108,12 +109,49 @@ function showCameraError(msg) {
   ui.cameraError.hidden = false;
 }
 
-/** Open a camera stream, by device id when given, otherwise the default front-facing camera. */
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(message), { name: 'TimeoutError' })), ms);
+  });
+  return Promise.race([promise.finally(() => clearTimeout(timer)), timeout]);
+}
+
+/**
+ * Open a camera stream, by device id when given, otherwise the default front-facing camera.
+ * Some platforms never settle getUserMedia while another app holds the camera, so the
+ * request is given a deadline; a stream that arrives after we gave up is stopped again.
+ */
 function openStream(deviceId) {
   const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
   if (deviceId) video.deviceId = { exact: deviceId };
   else video.facingMode = 'user';
-  return navigator.mediaDevices.getUserMedia({ video, audio: false });
+  const request = navigator.mediaDevices.getUserMedia({ video, audio: false });
+  const guarded = withTimeout(request, CAMERA_TIMEOUT_MS,
+    'The camera did not respond. It is probably in use by another app or browser tab: close that and try again.');
+  guarded.catch(() => request.then(s => { if (state.stream !== s) s.getTracks().forEach(t => t.stop()); }, () => {}));
+  return guarded;
+}
+
+function cameraErrorMessage(err) {
+  switch (err?.name) {
+    case 'NotAllowedError':
+    case 'PermissionDeniedError':
+      return 'Camera access was denied. Allow the camera for this site in your browser settings, then try again.';
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'No camera was found on this device.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+    case 'AbortError':
+      return 'The camera could not be started because another app or browser tab is using it. Close that and try again.';
+    case 'TimeoutError':
+      return err.message;
+    case 'SecurityError':
+      return 'Camera access is blocked here. The page must be opened over https:// or from localhost.';
+    default:
+      return `Camera error: ${err?.message || err?.name || err}`;
+  }
 }
 
 /** Show a stream in the preview, replacing (and stopping) the previous one. */
@@ -159,7 +197,7 @@ async function switchCamera(deviceId) {
     await attachStream(await openStream(deviceId), deviceId);
     localStorage.setItem(CAMERA_KEY, deviceId);
   } catch (err) {
-    toast(`Could not switch camera: ${err.message || err.name}`);
+    toast(`Could not switch camera. ${cameraErrorMessage(err)}`, 6000);
     if (state.deviceId) ui.selCamera.value = state.deviceId;
   } finally {
     ui.selCamera.disabled = false;
@@ -168,7 +206,10 @@ async function switchCamera(deviceId) {
 
 async function startCamera() {
   ui.btnCamera.disabled = true;
+  ui.btnCamera.textContent = 'Starting camera…';
   ui.cameraError.hidden = true;
+  ui.cameraStatus.textContent = 'Waiting for the camera. If nothing happens, another app or tab may be using it.';
+  ui.cameraStatus.hidden = false;
   try {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('This browser cannot access the camera here. Camera access needs a secure (https) page or localhost.');
@@ -178,15 +219,22 @@ async function startCamera() {
     try {
       stream = await openStream(preferred);
     } catch (err) {
-      if (!preferred) throw err;
-      stream = await openStream(null); // the remembered camera is gone; fall back to the default
+      // The remembered camera is gone or refuses these constraints: fall back to the default one.
+      if (!preferred || !['OverconstrainedError', 'NotFoundError', 'ConstraintNotSatisfiedError'].includes(err?.name)) throw err;
+      localStorage.removeItem(CAMERA_KEY);
+      stream = await openStream(null);
     }
     await attachStream(stream);
   } catch (err) {
-    showCameraError(`Camera error: ${err.message || err.name}`);
+    console.warn('Camera failed to start', err);
+    showCameraError(cameraErrorMessage(err));
+    ui.cameraStatus.hidden = true;
     ui.btnCamera.disabled = false;
+    ui.btnCamera.textContent = 'Try again';
     return;
   }
+  ui.cameraStatus.hidden = true;
+  ui.stage.classList.remove('is-idle');
   ui.placeholder.hidden = true;
   try {
     await ensureDetector();

@@ -177,7 +177,20 @@ select, input[type="text"] {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem;
   background: linear-gradient(160deg, #1d2430, #0f1218); color: #dfe3ea; text-align: center; padding: 2rem;
 }
-.stage-placeholder p { max-width: 36ch; color: #b8bfca; }
+.stage-placeholder h1 { font-size: 1.6rem; }
+.stage-placeholder p { max-width: 36ch; color: #b8bfca; margin: 0; }
+.placeholder-status { color: #b8bfca; font-size: 0.9rem; }
+/* Before the camera starts, let the stage grow to fit the intro text instead of clipping it:
+   a grid cell takes the larger of the 16:9 box and the placeholder's content height. */
+.stage.is-idle { display: grid; aspect-ratio: auto; }
+.stage.is-idle::before { content: ''; grid-area: 1 / 1; aspect-ratio: 16 / 9; }
+.stage.is-idle .stage-placeholder { grid-area: 1 / 1; position: relative; inset: auto; }
+.stage.is-idle video, .stage.is-idle canvas, .stage.is-idle .hud { display: none; }
+@media (max-width: 480px) {
+  .stage-placeholder { padding: 1.5rem 1rem; gap: 0.75rem; }
+  .stage-placeholder h1 { font-size: 1.25rem; }
+  .stage-placeholder p { font-size: 0.9rem; }
+}
 .controls { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: center; justify-content: center; }
 .hint { text-align: center; color: var(--muted); font-size: 0.88rem; }
 .error-box { background: var(--warn-bg); color: var(--warn-ink); padding: 0.75rem 1rem; border-radius: 10px; }
