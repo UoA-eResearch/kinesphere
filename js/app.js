@@ -1,10 +1,11 @@
 // Kinesphere: live pose view + recording, analysis dashboard and session library.
 
-import { createPoseDetector, flattenLandmarks, handsAboveHead, drawSkeleton, FRAME_SIZE } from './pose.js';
+import { createPoseDetector, flattenLandmarks, handsAboveHead, FRAME_SIZE } from './pose.js';
 import { store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError } from './session.js';
 import { analyze, KINESPHERE_CLASSES, GRID_ROWS, GRID_COLS, MAJOR_NAMES } from './analysis.js';
-import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, isDark, hideTip } from './charts.js';
+import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
+import { STYLES, DEFAULT_STYLE, createEffect } from './effects.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -15,6 +16,7 @@ const STORAGE_BUDGET = 5 * 1024 * 1024;
 const THEME_KEY = 'kinesphere:theme';
 const OVERLAY_KEY = 'kinesphere:overlay';
 const CAMERA_KEY = 'kinesphere:camera';
+const STYLE_KEY = 'kinesphere:style';
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
 const TEMPLATE_POSE = [
@@ -32,6 +34,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
+  btnStyle: $('#btn-style'), selStyle: $('#sel-style'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -43,6 +46,8 @@ const state = {
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
   showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
+  effect: createEffect(localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE),
+  lastLm: null, lastLmAt: 0, lastRender: 0,
   current: null,        // { session, analysis, saved, saveError }
   charts: [], replay: null,
 };
@@ -201,6 +206,19 @@ function setOverlay(on) {
   if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
 }
 
+function setStyle(id) {
+  state.effect = createEffect(id);
+  localStorage.setItem(STYLE_KEY, state.effect.id);
+  ui.selStyle.value = state.effect.id;
+  ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.effect.id)?.label ?? state.effect.id}`;
+  if (!state.showOverlay) setOverlay(true);
+}
+
+function nextStyle() {
+  const i = STYLES.findIndex(st => st.id === state.effect.id);
+  setStyle(STYLES[(i + 1) % STYLES.length].id);
+}
+
 function toggleFullscreen() {
   if (document.fullscreenElement) {
     document.exitFullscreen?.();
@@ -238,7 +256,7 @@ function startLoop() {
   requestAnimationFrame(loop);
 }
 
-function loop() {
+function loop(now) {
   if (!state.stream || (state.view !== 'live' && !state.recording)) {
     state.loopRunning = false;
     return;
@@ -247,35 +265,41 @@ function loop() {
   if (state.detector && v.readyState >= 2 && v.currentTime !== state.lastVideoTime) {
     state.lastVideoTime = v.currentTime;
     resizeCanvas();
-    const now = performance.now();
+    const ts = performance.now();
     let lm = null;
     try {
-      const result = state.detector.detect(v, now);
+      const result = state.detector.detect(v, ts);
       const first = result?.landmarks?.[0];
       if (first) lm = flattenLandmarks(first);
     } catch (err) {
       console.error(err);
     }
-    onFrame(lm, now);
+    state.lastLm = lm;
+    state.lastLmAt = ts;
+    onDetection(lm, ts);
   }
+  renderOverlay(now);
   requestAnimationFrame(loop);
 }
 
-function onFrame(lm, now) {
+/** Draw the overlay every animation frame so particle/trail styles stay smooth between detections. */
+function renderOverlay(now) {
+  const dt = state.lastRender ? clamp((now - state.lastRender) / 1000, 0, 0.1) : 1 / 60;
+  state.lastRender = now;
+  const { width, height } = ui.canvas;
+  overlayCtx.clearRect(0, 0, width, height);
+  if (!state.showOverlay) return;
+  const lm = state.lastLm && now - state.lastLmAt < 600 ? state.lastLm : null;
+  state.effect.draw(overlayCtx, lm, 0, width, height, dt, {});
+}
+
+function onDetection(lm, now) {
   state.fps.count++;
   if (now - state.fps.since >= 1000) {
     const fps = state.fps.count * 1000 / (now - state.fps.since);
     state.fps.count = 0;
     state.fps.since = now;
     ui.fps.textContent = `${fps.toFixed(0)} fps · ${state.detector.model} · ${state.detector.delegate}`;
-  }
-
-  const { width, height } = ui.canvas;
-  overlayCtx.clearRect(0, 0, width, height);
-  if (lm && state.showOverlay) {
-    drawSkeleton(overlayCtx, lm, 0, width, height, {
-      lineWidth: Math.max(2, width / 320), radius: Math.max(3, width / 240),
-    });
   }
 
   if (state.countdown) {
@@ -627,6 +651,7 @@ function setupReplay(session, root, onTime) {
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   const { times, lm, durationMs } = session;
+  const effect = createEffect(state.effect.id);
   let t = 0, playing = false, raf = 0, last = 0;
 
   const frameAt = ms => {
@@ -639,26 +664,22 @@ function setupReplay(session, root, onTime) {
     }
     return lo;
   };
-  const draw = () => {
+  const draw = (dt = 1 / 30) => {
     ctx.clearRect(0, 0, w, h);
     const i = frameAt(t);
-    if (i >= 0 && t - times[i] < 500) {
-      drawSkeleton(ctx, lm, i * FRAME_SIZE, w, h, {
-        mirror: session.mirrored, lineWidth: Math.max(2, w / 320), radius: Math.max(3, w / 240),
-        midColor: isDark() ? '#f4f4f2' : '#3a3a38',
-      });
-    }
+    const visible = i >= 0 && t - times[i] < 500;
+    effect.draw(ctx, visible ? lm : null, Math.max(0, i) * FRAME_SIZE, w, h, dt, { mirror: session.mirrored });
   };
-  const setTime = nt => {
+  const setTime = (nt, dt) => {
     t = clamp(nt, 0, durationMs);
     range.value = String(Math.round(t));
     timeEl.textContent = `${fmtClock(t)} / ${fmtClock(durationMs)}`;
-    draw();
+    draw(dt);
     onTime(t);
   };
   const tick = now => {
     if (!playing) return;
-    setTime(t + (now - last));
+    setTime(t + (now - last), clamp((now - last) / 1000, 0, 0.1));
     last = now;
     if (t >= durationMs) { playing = false; btn.textContent = '▶'; return; }
     raf = requestAnimationFrame(tick);
@@ -674,7 +695,7 @@ function setupReplay(session, root, onTime) {
       cancelAnimationFrame(raf);
     }
   };
-  range.oninput = () => setTime(Number(range.value));
+  range.oninput = () => { effect.reset(); setTime(Number(range.value)); };
   setTime(0);
   return { destroy() { playing = false; cancelAnimationFrame(raf); } };
 }
@@ -773,6 +794,15 @@ function init() {
   ui.hudStop.addEventListener('click', () => stopRecording());
   ui.btnOverlay.addEventListener('click', () => setOverlay(!state.showOverlay));
   setOverlay(state.showOverlay);
+  ui.selStyle.replaceChildren(...STYLES.map(st => {
+    const opt = document.createElement('option');
+    opt.value = st.id;
+    opt.textContent = st.label;
+    return opt;
+  }));
+  ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
+  ui.btnStyle.addEventListener('click', nextStyle);
+  setStyle(state.effect.id);
   ui.btnFullscreen.addEventListener('click', toggleFullscreen);
   if (!document.fullscreenEnabled && !ui.stage.requestFullscreen) ui.btnFullscreen.hidden = true;
   document.addEventListener('fullscreenchange', () => {
@@ -798,6 +828,7 @@ function init() {
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (e.code === 'KeyF' && state.stream) { e.preventDefault(); toggleFullscreen(); return; }
     if (e.code === 'KeyO') { e.preventDefault(); setOverlay(!state.showOverlay); return; }
+    if (e.code === 'KeyS') { e.preventDefault(); nextStyle(); return; }
     if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector) return;
     e.preventDefault();
     if (state.recording) stopRecording();

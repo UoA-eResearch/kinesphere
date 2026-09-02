@@ -19,6 +19,10 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
    (left side orange, right side blue). Stand back so your whole body is in the frame.
    The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>) and make the
    camera view fullscreen (<kbd>F</kbd>); recording controls stay available in fullscreen.
+   The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
+   skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
+   sparks that fly off fast-moving joints, or a constellation. The same style is used in the
+   dashboard replay. Styles are purely visual; the recorded data is identical.
    If you have more than one camera a **Camera** selector appears next to the model selector;
    your choice is remembered. Rear-facing cameras are shown un-mirrored.
 2. **Record.** Either press **Record**, press <kbd>Space</kbd>, or use *pose control*:
@@ -116,6 +120,7 @@ index.html        page shell
 css/style.css     styles, light and dark themes
 js/app.js         UI state: camera, recording, gesture control, dashboard, session library
 js/pose.js        MediaPipe Pose Landmarker wrapper and skeleton drawing
+js/effects.js     overlay styles (skeleton, stick figure, neon, trails, sparks, constellation)
 js/analysis.js    metrics (kinesphere, activity by region, speed, space, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, localStorage, JSON/CSV export
