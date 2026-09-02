@@ -13,6 +13,7 @@ const LOCKOUT_MS = 4000;       // ignore the gesture for a while after it fired
 const STORE_INTERVAL_MS = 1000 / 30; // store at most 30 frames per second
 const STORAGE_BUDGET = 5 * 1024 * 1024;
 const THEME_KEY = 'kinesphere:theme';
+const OVERLAY_KEY = 'kinesphere:overlay';
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
 const TEMPLATE_POSE = [
@@ -29,6 +30,7 @@ const ui = {
   views: { live: $('#view-live'), dashboard: $('#view-dashboard'), sessions: $('#view-sessions') },
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
+  hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -39,6 +41,7 @@ const state = {
   recording: null, countdown: null, hold: null, lockoutUntil: 0,
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
+  showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
   current: null,        // { session, analysis, saved, saveError }
   charts: [], replay: null,
 };
@@ -129,7 +132,26 @@ async function startCamera() {
     return;
   }
   ui.btnRecord.disabled = false;
+  ui.hudRecord.disabled = false;
   startLoop();
+}
+
+function setOverlay(on) {
+  state.showOverlay = on;
+  localStorage.setItem(OVERLAY_KEY, on ? 'on' : 'off');
+  ui.btnOverlay.textContent = on ? 'Overlay: on' : 'Overlay: off';
+  ui.btnOverlay.setAttribute('aria-pressed', String(on));
+  if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else if (ui.stage.requestFullscreen) {
+    ui.stage.requestFullscreen().catch(err => toast(`Fullscreen is not available: ${err.message}`));
+  } else {
+    toast('Fullscreen is not supported in this browser.');
+  }
 }
 
 function resizeCanvas() {
@@ -193,7 +215,7 @@ function onFrame(lm, now) {
 
   const { width, height } = ui.canvas;
   overlayCtx.clearRect(0, 0, width, height);
-  if (lm) {
+  if (lm && state.showOverlay) {
     drawSkeleton(overlayCtx, lm, 0, width, height, {
       lineWidth: Math.max(2, width / 320), radius: Math.max(3, width / 240),
     });
@@ -268,6 +290,8 @@ function startRecording(trigger, now = performance.now()) {
   ui.recTime.textContent = '0:00';
   ui.btnRecord.hidden = true;
   ui.btnStop.hidden = false;
+  ui.hudRecord.hidden = true;
+  ui.hudStop.hidden = false;
   ui.selModel.disabled = true;
 }
 
@@ -280,6 +304,8 @@ function stopRecording(trimBeforeT = null) {
   ui.recBadge.hidden = true;
   ui.btnRecord.hidden = false;
   ui.btnStop.hidden = true;
+  ui.hudRecord.hidden = false;
+  ui.hudStop.hidden = true;
   ui.selModel.disabled = false;
   let frames = rec.frames;
   if (trimBeforeT != null) frames = frames.filter(f => f.t < trimBeforeT);
@@ -683,20 +709,34 @@ function init() {
   ui.btnCamera.addEventListener('click', startCamera);
   ui.btnRecord.addEventListener('click', () => startRecording('button'));
   ui.btnStop.addEventListener('click', () => stopRecording());
+  ui.hudRecord.addEventListener('click', () => startRecording('button'));
+  ui.hudStop.addEventListener('click', () => stopRecording());
+  ui.btnOverlay.addEventListener('click', () => setOverlay(!state.showOverlay));
+  setOverlay(state.showOverlay);
+  ui.btnFullscreen.addEventListener('click', toggleFullscreen);
+  if (!document.fullscreenEnabled && !ui.stage.requestFullscreen) ui.btnFullscreen.hidden = true;
+  document.addEventListener('fullscreenchange', () => {
+    const fs = Boolean(document.fullscreenElement);
+    ui.btnFullscreen.textContent = fs ? '✕' : '⛶';
+    ui.btnFullscreen.title = fs ? 'Exit fullscreen (F)' : 'Fullscreen (F)';
+  });
   ui.selModel.addEventListener('change', () => {
     if (!state.stream) return;
     ui.btnRecord.disabled = true;
-    ensureDetector().then(() => { ui.btnRecord.disabled = false; }, err => toast(`Could not load model: ${err.message}`));
+    ui.hudRecord.disabled = true;
+    ensureDetector().then(() => { ui.btnRecord.disabled = false; ui.hudRecord.disabled = false; }, err => toast(`Could not load model: ${err.message}`));
   });
   ui.btnImport.addEventListener('click', () => ui.fileImport.click());
   ui.fileImport.addEventListener('change', () => importFile(ui.fileImport.files?.[0]));
   ui.video.addEventListener('resize', resizeCanvas);
 
   document.addEventListener('keydown', e => {
-    if (e.code !== 'Space' || state.view !== 'live') return;
+    if (state.view !== 'live' || e.ctrlKey || e.metaKey || e.altKey) return;
     const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
-    if (!state.detector) return;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.code === 'KeyF' && state.stream) { e.preventDefault(); toggleFullscreen(); return; }
+    if (e.code === 'KeyO') { e.preventDefault(); setOverlay(!state.showOverlay); return; }
+    if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector) return;
     e.preventDefault();
     if (state.recording) stopRecording();
     else startRecording('button');

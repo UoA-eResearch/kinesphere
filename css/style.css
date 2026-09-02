@@ -154,6 +154,19 @@ select, input[type="text"] {
 .rec-badge .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--rec); margin-right: 0.4rem; animation: blink 1s steps(2) infinite; vertical-align: -1px; }
 @keyframes blink { 50% { opacity: 0.25; } }
 .fps { margin-left: auto; font-size: 0.8rem; opacity: 0.85; font-variant-numeric: tabular-nums; }
+.hud-tools { display: flex; gap: 0.4rem; margin-left: 0.75rem; pointer-events: auto; }
+.hud-btn {
+  background: rgba(0, 0, 0, 0.55); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 8px;
+  padding: 0.3rem 0.6rem; font: inherit; font-size: 0.85rem; cursor: pointer; text-shadow: none;
+}
+.hud-btn:hover { background: rgba(0, 0, 0, 0.8); }
+.hud-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.hud-btn[aria-pressed="false"] { opacity: 0.75; }
+.fs-only { display: none; }
+.stage:fullscreen .fs-only:not([hidden]) { display: inline-flex; }
+.stage:fullscreen { max-width: none; width: 100%; height: 100%; aspect-ratio: auto; border-radius: 0; background: #000; }
+.stage:fullscreen #hud-record { background: var(--accent); border-color: transparent; }
+.stage:fullscreen #hud-stop { background: var(--rec); border-color: transparent; }
 .status { display: inline-block; align-self: flex-start; background: rgba(0, 0, 0, 0.55); padding: 0.4rem 0.75rem; border-radius: 10px; font-size: 0.95rem; }
 .countdown { font-size: clamp(64px, 18vw, 140px); font-weight: 800; line-height: 1; }
 .hold { display: flex; align-items: center; gap: 0.75rem; }

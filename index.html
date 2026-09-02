@@ -32,6 +32,12 @@
             <div class="hud-top">
               <span id="rec-badge" class="rec-badge" hidden><span class="dot"></span>REC <span id="rec-time" class="mono">0:00</span></span>
               <span id="fps" class="fps"></span>
+              <div class="hud-tools">
+                <button id="hud-record" class="hud-btn fs-only" disabled>● Record</button>
+                <button id="hud-stop" class="hud-btn fs-only" hidden>■ Stop</button>
+                <button id="btn-overlay" class="hud-btn" aria-pressed="true" title="Show or hide the detected pose (O)">Overlay: on</button>
+                <button id="btn-fullscreen" class="hud-btn" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
+              </div>
             </div>
             <div class="hud-center"><div id="countdown" class="countdown" hidden></div></div>
             <div class="hud-bottom">
@@ -60,7 +66,7 @@
           </select>
         </label>
       </div>
-      <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording.</p>
+      <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay.</p>
     </section>
 
     <section id="view-dashboard" class="view" hidden></section>

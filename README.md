@@ -17,6 +17,8 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
 1. **Start camera.** Allow camera access. The lite pose model (about 6 MB) is downloaded on first
    use, then your webcam is shown mirrored with the detected skeleton drawn on top
    (left side orange, right side blue). Stand back so your whole body is in the frame.
+   The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>) and make the
+   camera view fullscreen (<kbd>F</kbd>); recording controls stay available in fullscreen.
 2. **Record.** Either press **Record**, press <kbd>Space</kbd>, or use *pose control*:
    raise both hands above your head and hold them there for 1.5 s. A 3-second countdown
    follows so you can get into position. The same gesture (or **Stop** / <kbd>Space</kbd>)
