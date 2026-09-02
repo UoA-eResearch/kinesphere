@@ -15,6 +15,7 @@ const STORE_INTERVAL_MS = 1000 / 30; // store at most 30 frames per second
 const STORAGE_BUDGET = 5 * 1024 * 1024;
 const THEME_KEY = 'kinesphere:theme';
 const OVERLAY_KEY = 'kinesphere:overlay';
+const VIDEO_KEY = 'kinesphere:video';
 const CAMERA_KEY = 'kinesphere:camera';
 const STYLE_KEY = 'kinesphere:style';
 const CAMERA_TIMEOUT_MS = 15000;
@@ -35,7 +36,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
-  btnStyle: $('#btn-style'), selStyle: $('#sel-style'),
+  btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -47,6 +48,7 @@ const state = {
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
   showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
+  showVideo: localStorage.getItem(VIDEO_KEY) !== 'off',
   effect: createEffect(localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE),
   lastLm: null, lastLmAt: 0, lastRender: 0,
   current: null,        // { session, analysis, saved, saveError }
@@ -255,6 +257,15 @@ function setOverlay(on) {
   ui.btnOverlay.textContent = on ? 'Overlay: on' : 'Overlay: off';
   ui.btnOverlay.setAttribute('aria-pressed', String(on));
   if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
+}
+
+/** Show or hide the camera feed. The stream keeps running so detection and recording continue. */
+function setVideo(on) {
+  state.showVideo = on;
+  localStorage.setItem(VIDEO_KEY, on ? 'on' : 'off');
+  ui.stage.classList.toggle('no-video', !on);
+  ui.btnVideo.textContent = on ? 'Video: on' : 'Video: off';
+  ui.btnVideo.setAttribute('aria-pressed', String(on));
 }
 
 function setStyle(id) {
@@ -854,6 +865,8 @@ function init() {
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   ui.btnStyle.addEventListener('click', nextStyle);
   setStyle(state.effect.id);
+  ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
+  setVideo(state.showVideo);
   ui.btnFullscreen.addEventListener('click', toggleFullscreen);
   if (!document.fullscreenEnabled && !ui.stage.requestFullscreen) ui.btnFullscreen.hidden = true;
   document.addEventListener('fullscreenchange', () => {
@@ -880,6 +893,7 @@ function init() {
     if (e.code === 'KeyF' && state.stream) { e.preventDefault(); toggleFullscreen(); return; }
     if (e.code === 'KeyO') { e.preventDefault(); setOverlay(!state.showOverlay); return; }
     if (e.code === 'KeyS') { e.preventDefault(); nextStyle(); return; }
+    if (e.code === 'KeyV') { e.preventDefault(); setVideo(!state.showVideo); return; }
     if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector) return;
     e.preventDefault();
     if (state.recording) stopRecording();

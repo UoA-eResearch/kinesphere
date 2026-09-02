@@ -17,8 +17,10 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
 1. **Start camera.** Allow camera access. The lite pose model (about 6 MB) is downloaded on first
    use, then your webcam is shown mirrored with the detected skeleton drawn on top
    (left side orange, right side blue). Stand back so your whole body is in the frame.
-   The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>) and make the
-   camera view fullscreen (<kbd>F</kbd>); recording controls stay available in fullscreen.
+   The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>), hide the camera
+   feed so only the overlay is shown on black (<kbd>V</kbd>), and make the camera view fullscreen
+   (<kbd>F</kbd>); recording controls stay available in fullscreen. Hiding the feed does not stop
+   the camera: detection and recording carry on.
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
    sparks that fly off fast-moving joints, or a constellation. The same style is used in the
