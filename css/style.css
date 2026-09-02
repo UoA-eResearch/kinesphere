@@ -180,12 +180,14 @@ select, input[type="text"] {
 .stage-placeholder h1 { font-size: 1.6rem; }
 .stage-placeholder p { max-width: 36ch; color: #b8bfca; margin: 0; }
 .placeholder-status { color: #b8bfca; font-size: 0.9rem; }
-/* Before the camera starts, let the stage grow to fit the intro text instead of clipping it:
-   a grid cell takes the larger of the 16:9 box and the placeholder's content height. */
-.stage.is-idle { display: grid; aspect-ratio: auto; }
+/* Before the camera starts the stage is a grid cell holding a 16:9 spacer and the intro,
+   so it is at least 16:9 but grows to fit the text instead of clipping it. */
+.stage.is-idle { display: grid; grid-template-columns: minmax(0, 1fr); aspect-ratio: auto; }
 .stage.is-idle::before { content: ''; grid-area: 1 / 1; aspect-ratio: 16 / 9; }
-.stage.is-idle .stage-placeholder { grid-area: 1 / 1; position: relative; inset: auto; }
+.stage.is-idle .stage-placeholder { grid-area: 1 / 1; position: relative; inset: auto; min-width: 0; }
 .stage.is-idle video, .stage.is-idle canvas, .stage.is-idle .hud { display: none; }
+.stage-placeholder > * { max-width: 100%; box-sizing: border-box; }
+.stage-placeholder .placeholder-status, .stage-placeholder .error-box { max-width: 44ch; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .stage-placeholder { padding: 1.5rem 1rem; gap: 0.75rem; }
   .stage-placeholder h1 { font-size: 1.25rem; }
