@@ -287,4 +287,11 @@ select, input[type="text"] {
 /* Toast */
 .toast { position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%); z-index: 60; background: var(--ink); color: var(--bg); padding: 0.6rem 1rem; border-radius: 10px; box-shadow: var(--shadow); max-width: min(90vw, 480px); }
 
+@media (max-width: 480px) {
+  .hud { padding: 0.5rem; }
+  .hud-btn { font-size: 0.75rem; padding: 0.2rem 0.45rem; }
+  .status { font-size: 0.85rem; padding: 0.3rem 0.55rem; }
+  .fps { font-size: 0.7rem; }
+}
+
 @media (prefers-reduced-motion: reduce) { .rec-badge .dot { animation: none; } }
