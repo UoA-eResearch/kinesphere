@@ -1,0 +1,2 @@
+# kinesphere
+MediaPipe Pose dashboard
