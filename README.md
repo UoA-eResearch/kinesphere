@@ -19,6 +19,8 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
    (left side orange, right side blue). Stand back so your whole body is in the frame.
    The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>) and make the
    camera view fullscreen (<kbd>F</kbd>); recording controls stay available in fullscreen.
+   If you have more than one camera a **Camera** selector appears next to the model selector;
+   your choice is remembered. Rear-facing cameras are shown un-mirrored.
 2. **Record.** Either press **Record**, press <kbd>Space</kbd>, or use *pose control*:
    raise both hands above your head and hold them there for 1.5 s. A 3-second countdown
    follows so you can get into position. The same gesture (or **Stop** / <kbd>Space</kbd>)

@@ -31,7 +31,7 @@ export function defaultName(d = new Date()) {
 }
 
 /** Build a session object from recorded frames [{ t, lm: Float32Array(132) }]. */
-export function buildSession({ frames, width, height, model, trigger, startedAt }) {
+export function buildSession({ frames, width, height, model, trigger, startedAt, mirrored = true }) {
   const n = frames.length;
   const times = new Float64Array(n);
   const lm = new Float32Array(n * FRAME_SIZE);
@@ -46,7 +46,7 @@ export function buildSession({ frames, width, height, model, trigger, startedAt 
     createdAt: started.toISOString(),
     durationMs: n ? Math.round(times[n - 1]) : 0,
     width, height,
-    mirrored: true,
+    mirrored: mirrored !== false,
     model: model ?? 'lite',
     trigger: trigger ?? 'button',
     frameCount: n,

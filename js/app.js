@@ -14,6 +14,7 @@ const STORE_INTERVAL_MS = 1000 / 30; // store at most 30 frames per second
 const STORAGE_BUDGET = 5 * 1024 * 1024;
 const THEME_KEY = 'kinesphere:theme';
 const OVERLAY_KEY = 'kinesphere:overlay';
+const CAMERA_KEY = 'kinesphere:camera';
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
 const TEMPLATE_POSE = [
@@ -24,7 +25,7 @@ const TEMPLATE_POSE = [
 const ui = {
   video: $('#video'), canvas: $('#overlay'), stage: $('#stage'), placeholder: $('#stage-placeholder'),
   cameraError: $('#camera-error'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
-  chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), status: $('#status'), fps: $('#fps'),
+  chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'), status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
   views: { live: $('#view-live'), dashboard: $('#view-dashboard'), sessions: $('#view-sessions') },
@@ -37,7 +38,7 @@ const overlayCtx = ui.canvas.getContext('2d');
 const state = {
   view: 'live',
   detector: null, detectorPromise: null,
-  stream: null, loopRunning: false, lastVideoTime: -1,
+  stream: null, deviceId: null, mirrored: true, loopRunning: false, lastVideoTime: -1,
   recording: null, countdown: null, hold: null, lockoutUntil: 0,
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
@@ -99,6 +100,64 @@ function showCameraError(msg) {
   ui.cameraError.hidden = false;
 }
 
+/** Open a camera stream, by device id when given, otherwise the default front-facing camera. */
+function openStream(deviceId) {
+  const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  else video.facingMode = 'user';
+  return navigator.mediaDevices.getUserMedia({ video, audio: false });
+}
+
+/** Show a stream in the preview, replacing (and stopping) the previous one. */
+async function attachStream(stream, requestedDeviceId = null) {
+  state.stream?.getTracks().forEach(t => t.stop());
+  state.stream = stream;
+  state.lastVideoTime = -1;
+  ui.video.srcObject = stream;
+  await new Promise(resolve => {
+    if (ui.video.readyState >= 1) resolve();
+    else ui.video.addEventListener('loadedmetadata', resolve, { once: true });
+  });
+  try { await ui.video.play(); } catch { /* autoplay is muted so this should not fail */ }
+  resizeCanvas();
+  const settings = stream.getVideoTracks()[0]?.getSettings?.() ?? {};
+  state.deviceId = requestedDeviceId || settings.deviceId || null;
+  // Rear (environment-facing) cameras show the scene as it is; everything else is a mirror.
+  state.mirrored = settings.facingMode !== 'environment';
+  ui.stage.classList.toggle('no-mirror', !state.mirrored);
+  await refreshCameraList();
+}
+
+/** Populate the camera selector; it is only shown when more than one camera exists. */
+async function refreshCameraList() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  let devices;
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return; }
+  const cams = devices.filter(d => d.kind === 'videoinput');
+  ui.selCamera.replaceChildren(...cams.map((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Camera ${i + 1}`;
+    return opt;
+  }));
+  if (state.deviceId && cams.some(d => d.deviceId === state.deviceId)) ui.selCamera.value = state.deviceId;
+  ui.cameraWrap.hidden = cams.length < 2;
+}
+
+async function switchCamera(deviceId) {
+  if (!state.stream || state.recording || !deviceId || deviceId === state.deviceId) return;
+  ui.selCamera.disabled = true;
+  try {
+    await attachStream(await openStream(deviceId), deviceId);
+    localStorage.setItem(CAMERA_KEY, deviceId);
+  } catch (err) {
+    toast(`Could not switch camera: ${err.message || err.name}`);
+    if (state.deviceId) ui.selCamera.value = state.deviceId;
+  } finally {
+    ui.selCamera.disabled = false;
+  }
+}
+
 async function startCamera() {
   ui.btnCamera.disabled = true;
   ui.cameraError.hidden = true;
@@ -106,22 +165,20 @@ async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('This browser cannot access the camera here. Camera access needs a secure (https) page or localhost.');
     }
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false,
-    });
+    const preferred = localStorage.getItem(CAMERA_KEY);
+    let stream;
+    try {
+      stream = await openStream(preferred);
+    } catch (err) {
+      if (!preferred) throw err;
+      stream = await openStream(null); // the remembered camera is gone; fall back to the default
+    }
+    await attachStream(stream);
   } catch (err) {
     showCameraError(`Camera error: ${err.message || err.name}`);
     ui.btnCamera.disabled = false;
     return;
   }
-  ui.video.srcObject = state.stream;
-  await new Promise(resolve => {
-    if (ui.video.readyState >= 1) resolve();
-    else ui.video.addEventListener('loadedmetadata', resolve, { once: true });
-  });
-  try { await ui.video.play(); } catch { /* autoplay is muted so this should not fail */ }
-  resizeCanvas();
   ui.placeholder.hidden = true;
   try {
     await ensureDetector();
@@ -293,6 +350,7 @@ function startRecording(trigger, now = performance.now()) {
   ui.hudRecord.hidden = true;
   ui.hudStop.hidden = false;
   ui.selModel.disabled = true;
+  ui.selCamera.disabled = true;
 }
 
 /** Stop recording. `trimBeforeT` drops frames from that time on (used to cut the stop gesture). */
@@ -307,6 +365,7 @@ function stopRecording(trimBeforeT = null) {
   ui.hudRecord.hidden = false;
   ui.hudStop.hidden = true;
   ui.selModel.disabled = false;
+  ui.selCamera.disabled = false;
   let frames = rec.frames;
   if (trimBeforeT != null) frames = frames.filter(f => f.t < trimBeforeT);
   if (frames.length < 10) {
@@ -320,6 +379,7 @@ function stopRecording(trimBeforeT = null) {
     model: state.detector?.model,
     trigger: rec.trigger,
     startedAt: rec.wallStart,
+    mirrored: state.mirrored,
   });
   openSession(session, { save: true });
 }
@@ -726,6 +786,8 @@ function init() {
     ui.hudRecord.disabled = true;
     ensureDetector().then(() => { ui.btnRecord.disabled = false; ui.hudRecord.disabled = false; }, err => toast(`Could not load model: ${err.message}`));
   });
+  ui.selCamera.addEventListener('change', () => switchCamera(ui.selCamera.value));
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (state.stream) refreshCameraList(); });
   ui.btnImport.addEventListener('click', () => ui.fileImport.click());
   ui.fileImport.addEventListener('change', () => importFile(ui.fileImport.files?.[0]));
   ui.video.addEventListener('resize', resizeCanvas);

@@ -145,6 +145,7 @@ select, input[type="text"] {
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
   transform: scaleX(-1);
 }
+.stage.no-mirror video, .stage.no-mirror canvas { transform: none; }
 .stage.is-recording { outline: 3px solid var(--rec); outline-offset: -3px; }
 .hud { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 0.9rem; pointer-events: none; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
 .hud-top { display: flex; justify-content: space-between; align-items: center; }
