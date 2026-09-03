@@ -163,6 +163,8 @@ The site is served from the root of the `main` branch (Settings → Pages → De
 `main` / `/ (root)`). All paths are relative, so it also works from a project sub-path such as
 `https://<org>.github.io/kinesphere/`.
 
-## License
+## Contributing and license
 
-MIT, see [LICENSE](LICENSE).
+Kinesphere is open source under the MIT licence (see [LICENSE](LICENSE)). The app links back to
+this repository from its header and footer; issues and pull requests are welcome at
+<https://github.com/UoA-eResearch/kinesphere>.
