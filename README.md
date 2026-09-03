@@ -16,8 +16,9 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
 ## Using the app
 
 1. **Start camera.** Allow camera access. The pose runtime and model (about 18 MB for MediaPipe
-   Lite) are downloaded on first use with a progress bar in the preview, and come from the browser
-   cache afterwards. Then your webcam is shown mirrored with the detected skeleton drawn on top
+   Lite) are downloaded on first use with a progress bar in the preview. They are then kept in
+   the browser's Cache Storage, so later visits load them instantly, even offline; the **?** help
+   panel shows how much is cached and can clear it. Then your webcam is shown mirrored with the detected skeleton drawn on top
    (left side orange, right side blue). Stand back so your whole body is in the frame.
    The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>), hide the camera
    feed so only the overlay is shown on black (<kbd>V</kbd>), and make the camera view fullscreen
@@ -82,6 +83,10 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
 * Nothing is uploaded anywhere. The only network requests are for the pose libraries and model
   files (jsDelivr, Google's model storage and, for MoveNet, TF Hub / Kaggle) and the app's own
   static files.
+* Downloaded model files (MediaPipe's WebAssembly runtime and `.task` models, MoveNet weights)
+  are stored in the browser's Cache Storage under `kinesphere-models-v1`, between 5 and 45 MB
+  depending on which models you have used. Clear them from the **?** help panel or by clearing
+  the site's data.
 * Sessions live in `localStorage` under keys starting with `kinesphere:`. Browsers allow about
   5 MB per site, which is roughly 6–8 minutes of recording at 30 frames per second. When the
   quota is exceeded the dashboard still shows, with a warning that the session was not saved;

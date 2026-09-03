@@ -212,6 +212,7 @@ select, input[type="text"] {
 .help-panel dl { margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
 .help-panel dt { font-weight: 650; color: var(--ink); }
 .help-panel dd { margin: 0 0 0.25rem; }
+.help-panel .cache-info { margin: 0.75rem 0 0; padding-top: 0.75rem; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
 .help-panel[open] { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1.25rem 1rem; }
 .person-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .person-tabs .tab {

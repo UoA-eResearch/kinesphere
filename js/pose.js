@@ -22,35 +22,93 @@ export const MODELS = {
 const MODEL_BYTES = { lite: 5.8e6, full: 9.4e6, heavy: 30.7e6, 'movenet-lightning': 4.7e6, 'movenet-thunder': 12.5e6, 'movenet-multipose': 9.4e6 };
 const MP_WASM_BYTES = 11.8e6;
 
+const MODEL_CACHE = 'kinesphere-models-v1';
+
+async function openModelCache() {
+  try {
+    if (typeof caches === 'undefined') return null;
+    return await caches.open(MODEL_CACHE);
+  } catch {
+    return null; // e.g. insecure context or storage disabled
+  }
+}
+
+/** True when the file is already in the persistent model cache. */
+export async function isCached(url) {
+  const cache = await openModelCache();
+  if (!cache) return false;
+  try { return Boolean(await cache.match(url)); } catch { return false; }
+}
+
+/** Size and file count of the persistent model cache. */
+export async function modelCacheInfo() {
+  const cache = await openModelCache();
+  if (!cache) return { supported: false, bytes: 0, files: 0 };
+  let bytes = 0, files = 0;
+  try {
+    for (const req of await cache.keys()) {
+      const res = await cache.match(req);
+      if (!res) continue;
+      files++;
+      const len = Number(res.headers.get('content-length'));
+      bytes += len || (await res.clone().arrayBuffer()).byteLength;
+    }
+  } catch { /* ignore */ }
+  return { supported: true, bytes, files };
+}
+
+export async function clearModelCache() {
+  try { if (typeof caches !== 'undefined') await caches.delete(MODEL_CACHE); } catch { /* ignore */ }
+}
+
 /**
- * Fetch a URL as bytes while reporting progress. `onProgress(loaded, total)` is called as chunks
- * arrive; `total` comes from Content-Length, or the expected size until the real size is known.
+ * Fetch a URL as bytes while reporting progress, using the persistent model cache when the
+ * file is already there and storing it afterwards when it is not. `onProgress(loaded, total)`
+ * is called as chunks arrive; `total` comes from Content-Length, or the expected size until
+ * the real size is known.
  */
 export async function fetchWithProgress(url, onProgress, expectedBytes = 0) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
+  const cache = await openModelCache();
+  let res = null, fromCache = false;
+  if (cache) {
+    try { res = await cache.match(url); fromCache = Boolean(res); } catch { res = null; }
+  }
+  if (!res) {
+    res = await fetch(url);
+    if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
+  }
   const declared = Number(res.headers.get('content-length')) || 0;
   let total = declared || expectedBytes || 0;
+  let out;
   if (!res.body?.getReader) {
-    const buf = new Uint8Array(await res.arrayBuffer());
-    onProgress?.(buf.length, buf.length);
-    return buf;
+    out = new Uint8Array(await res.arrayBuffer());
+    onProgress?.(out.length, out.length);
+  } else {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      if (loaded > total) total = loaded;
+      onProgress?.(loaded, total);
+    }
+    out = new Uint8Array(loaded);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    onProgress?.(loaded, loaded);
   }
-  const reader = res.body.getReader();
-  const chunks = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.length;
-    if (loaded > total) total = loaded;
-    onProgress?.(loaded, total);
+  if (cache && !fromCache) {
+    try {
+      await cache.put(url, new Response(out, {
+        headers: { 'content-type': res.headers.get('content-type') || 'application/octet-stream', 'content-length': String(out.length) },
+      }));
+    } catch (err) {
+      console.warn('Could not cache', url, err);
+    }
   }
-  const out = new Uint8Array(loaded);
-  let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.length; }
-  onProgress?.(loaded, loaded);
   return out;
 }
 
@@ -160,7 +218,8 @@ async function createMediaPipe(info, people, onStatus) {
   const modelUrl = MODELS[info.variant] ?? MODELS.lite;
   progress.expect('wasm', MP_WASM_BYTES);
   progress.expect('model', MODEL_BYTES[info.id] ?? 6e6);
-  progress.say(`Downloading the MediaPipe runtime and the ${info.label} model…`);
+  const cached = (await Promise.all([isCached(`${MP_CDN}/wasm/${wasmName}.wasm`), isCached(modelUrl)])).every(Boolean);
+  progress.say(cached ? `Loading the ${info.label} model from cache…` : `Downloading the MediaPipe runtime and the ${info.label} model…`);
   const [wasmBytes, modelBytes] = await Promise.all([
     fetchWithProgress(`${MP_CDN}/wasm/${wasmName}.wasm`, progress.fetcher('wasm'), MP_WASM_BYTES),
     fetchWithProgress(modelUrl, progress.fetcher('model'), MODEL_BYTES[info.id] ?? 6e6),
@@ -247,7 +306,8 @@ async function createMoveNet(info, people, onStatus) {
   const pd = await loadTensorFlow(onStatus);
   const progress = progressTracker(onStatus);
   progress.expect('model', MODEL_BYTES[info.id] ?? 6e6);
-  progress.say(`Downloading the ${info.label} model…`);
+  const cached = await isCached(`${MOVENET_URLS[info.variant]}/model.json?tfjs-format=file`);
+  progress.say(cached ? `Loading the ${info.label} model from cache…` : `Downloading the ${info.label} model…`);
   const multi = info.variant === 'MultiPose.Lightning';
   const modelType = multi ? pd.movenet.modelType.MULTIPOSE_LIGHTNING
     : info.variant === 'SinglePose.Thunder' ? pd.movenet.modelType.SINGLEPOSE_THUNDER

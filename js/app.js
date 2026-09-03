@@ -2,6 +2,7 @@
 
 import {
   createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE,
+  modelCacheInfo, clearModelCache,
 } from './pose.js';
 import {
   store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, personPresent,
@@ -39,6 +40,7 @@ const ui = {
   cameraError: $('#camera-error'), cameraStatus: $('#camera-status'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
   chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selPeople: $('#sel-people'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'),
   settingHelp: $('#setting-help'), helpPanel: $('#help-panel'), btnHelp: $('#btn-help'),
+  cacheInfo: $('#cache-info'), btnClearCache: $('#btn-clear-cache'),
   status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
@@ -155,6 +157,19 @@ function syncSettingsUI() {
   ui.settingHelp.textContent = `${info.help} ${peopleNote}`;
   localStorage.setItem(MODEL_KEY, info.id);
   localStorage.setItem(PEOPLE_KEY, String(people));
+}
+
+async function refreshCacheInfo() {
+  const info = await modelCacheInfo();
+  if (!info.supported) {
+    ui.cacheInfo.textContent = 'This browser cannot keep downloaded models between visits here (it needs a secure https page), so they are fetched each time.';
+    ui.btnClearCache.hidden = true;
+    return;
+  }
+  ui.cacheInfo.textContent = info.files
+    ? `Downloaded models are kept in this browser so they load instantly next time: ${info.files} file${info.files === 1 ? '' : 's'}, ${fmtBytes(info.bytes)}.`
+    : 'Downloaded models are kept in this browser so they load instantly next time. Nothing is cached yet.';
+  ui.btnClearCache.hidden = !info.files;
 }
 
 function onSettingsChanged() {
@@ -388,6 +403,7 @@ function ensureDetector() {
   state.detectorPromise = createPoseDetector({ model, people, onStatus: onLoadStatus }).then(
     d => {
       showLoadProgress(null);
+      refreshCacheInfo();
       state.detector = d;
       state.detectorPromise = null;
       state.tracker = createTracker(d.people);
@@ -1019,7 +1035,16 @@ function init() {
     ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open));
     if (ui.helpPanel.open) ui.helpPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
-  ui.helpPanel.addEventListener('toggle', () => ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open)));
+  ui.helpPanel.addEventListener('toggle', () => {
+    ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open));
+    if (ui.helpPanel.open) refreshCacheInfo();
+  });
+  ui.btnClearCache.addEventListener('click', async () => {
+    await clearModelCache();
+    await refreshCacheInfo();
+    toast('Cached models removed. The next model load will download again.');
+  });
+  refreshCacheInfo();
 
   ui.btnCamera.addEventListener('click', startCamera);
   ui.btnRecord.addEventListener('click', () => startRecording('button'));
