@@ -1,11 +1,11 @@
 // Kinesphere: live pose view + recording, analysis dashboard and session library.
 
 import {
-  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE,
+  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE, HAND_SIZE,
   modelCacheInfo, clearModelCache,
 } from './pose.js';
 import {
-  store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, personPresent,
+  store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, handOffset, personPresent,
 } from './session.js';
 import { analyze, KINESPHERE_CLASSES, GRID_ROWS, GRID_COLS, MAJOR_NAMES } from './analysis.js';
 import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
@@ -65,6 +65,7 @@ const state = {
   showVideo: localStorage.getItem(VIDEO_KEY) !== 'off',
   styleId: localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE,
   smoother: createSmoother(localStorage.getItem(SMOOTH_KEY) || DEFAULT_SMOOTHING, MAX_PEOPLE),
+  handSmoother: createSmoother(localStorage.getItem(SMOOTH_KEY) || DEFAULT_SMOOTHING, MAX_PEOPLE, HAND_SIZE),
   lastPeople: null, lastPeopleAt: 0, lastRender: 0,
   current: null,        // { session, analyses, person, saved, saveError }
   charts: [], replay: null,
@@ -350,6 +351,7 @@ function setOverlay(on) {
 
 function setSmoothing(id) {
   state.smoother = createSmoother(id, MAX_PEOPLE);
+  state.handSmoother = createSmoother(state.smoother.id, MAX_PEOPLE, HAND_SIZE);
   localStorage.setItem(SMOOTH_KEY, state.smoother.id);
   ui.selSmooth.value = state.smoother.id;
   ui.selSmooth.title = `${SMOOTHING_LEVELS.find(l => l.id === state.smoother.id)?.help ?? ''} Display only: recordings keep the raw landmarks.`;
@@ -463,14 +465,22 @@ function renderOverlay(now) {
   if (!state.showOverlay || !state.detector) return;
   const raw = state.lastPeople && now - state.lastPeopleAt < 600 ? state.lastPeople : null;
   const minVis = minVisibilityFor(state.detector.engine);
-  const slots = raw ? raw.map((lm, p) => {
-    if (!lm) { state.smoother.reset(p); return null; }
-    return state.smoother.apply(lm, 0, p, dt);
+  const slots = raw ? raw.map((pose, p) => {
+    if (!pose) { state.smoother.reset(p); state.handSmoother.reset(p); return null; }
+    return {
+      lm: state.smoother.apply(pose.lm, 0, p, dt),
+      hands: pose.hands ? state.handSmoother.apply(pose.hands, 0, p, dt) : null,
+      face: pose.face ?? null,
+    };
   }) : null;
-  if (!slots) state.smoother.reset();
-  state.effects.forEach((effect, p) => effect.draw(overlayCtx, slots?.[p] ?? null, 0, width, height, dt, { person: p, minVis }));
+  if (!slots) { state.smoother.reset(); state.handSmoother.reset(); }
+  const faceContours = state.detector.faceContours;
+  state.effects.forEach((effect, p) => {
+    const pose = slots?.[p] ?? null;
+    effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours });
+  });
   if (slots && state.detector.people > 1) {
-    slots.forEach((lm, p) => { if (lm) drawPersonBadge(overlayCtx, lm, 0, width, height, p, { mirrorText: state.mirrored, minVis }); });
+    slots.forEach((pose, p) => { if (pose) drawPersonBadge(overlayCtx, pose.lm, 0, width, height, p, { mirrorText: state.mirrored, minVis }); });
   }
 }
 
@@ -502,8 +512,13 @@ function onDetection(slots, now) {
     const rec = state.recording;
     if (present.length && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
       const frame = new Float32Array(rec.people * FRAME_SIZE);
-      slots.forEach((lm, p) => { if (lm && p < rec.people) frame.set(lm, p * FRAME_SIZE); });
-      rec.frames.push({ t: now - rec.startedAt, lm: frame });
+      const hands = rec.hands ? new Float32Array(rec.people * HAND_SIZE) : null;
+      slots.forEach((pose, p) => {
+        if (!pose || p >= rec.people) return;
+        frame.set(pose.lm, p * FRAME_SIZE);
+        if (hands && pose.hands) hands.set(pose.hands, p * HAND_SIZE);
+      });
+      rec.frames.push({ t: now - rec.startedAt, lm: frame, hands });
       rec.lastStored = now;
     }
     ui.recTime.textContent = fmtClock(now - rec.startedAt);
@@ -515,7 +530,7 @@ function onDetection(slots, now) {
 
 function updateGesture(present, now) {
   const minVis = minVisibilityFor(state.detector?.engine);
-  const active = ui.chkGesture.checked && !state.countdown && now >= state.lockoutUntil && present.some(lm => handsAboveHead(lm, 0, minVis));
+  const active = ui.chkGesture.checked && !state.countdown && now >= state.lockoutUntil && present.some(pose => handsAboveHead(pose.lm, 0, minVis));
   if (!active) {
     if (state.hold) { state.hold = null; ui.hold.hidden = true; }
     return;
@@ -554,7 +569,7 @@ function startRecording(trigger, now = performance.now()) {
   if (state.recording || !state.detector) return;
   state.countdown = null;
   ui.countdown.hidden = true;
-  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people };
+  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people, hands: Boolean(state.detector.hands) };
   ui.stage.classList.add('is-recording');
   ui.recBadge.hidden = false;
   ui.recTime.textContent = '0:00';
@@ -648,7 +663,8 @@ function describeSession(s) {
   const info = ENGINES.find(e => e.id === s.model);
   const modelText = info ? info.label : `${escapeHtml(s.model)} model`;
   const people = (s.people || 1) > 1 ? ` · ${s.people} people` : '';
-  return `${modelText}${people}`;
+  const hands = s.hands ? ' · with hands' : '';
+  return `${modelText}${people}${hands}`;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -866,6 +882,7 @@ function setupReplay(session, root, onTime) {
   const people = session.people || 1;
   const effects = Array.from({ length: people }, () => createEffect(state.styleId));
   const smoother = createSmoother(state.smoother.id, people);
+  const handSmoother = session.hands ? createSmoother(state.smoother.id, people, HAND_SIZE) : null;
   const minVis = minVisibilityFor(session.engine);
   let t = 0, playing = false, raf = 0, last = 0;
 
@@ -886,9 +903,10 @@ function setupReplay(session, root, onTime) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      if (!visible) { smoother.reset(p); effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
+      if (!visible) { smoother.reset(p); handSmoother?.reset(p); effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
       const shown = smoother.apply(lm, offset, p, dt);
-      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p });
+      const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
+      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p, hands });
       if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: session.mirrored, minVis });
     }
   };
@@ -917,7 +935,7 @@ function setupReplay(session, root, onTime) {
       cancelAnimationFrame(raf);
     }
   };
-  range.oninput = () => { effects.forEach(e => e.reset()); smoother.reset(); setTime(Number(range.value)); };
+  range.oninput = () => { effects.forEach(e => e.reset()); smoother.reset(); handSmoother?.reset(); setTime(Number(range.value)); };
   setTime(0);
   return { destroy() { playing = false; cancelAnimationFrame(raf); } };
 }

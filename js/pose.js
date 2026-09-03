@@ -17,9 +17,10 @@ export const MODELS = {
   lite: `${MP_MODEL_BASE}/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
   full: `${MP_MODEL_BASE}/pose_landmarker_full/float16/1/pose_landmarker_full.task`,
   heavy: `${MP_MODEL_BASE}/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task`,
+  holistic: 'https://storage.googleapis.com/mediapipe-models/holistic_landmarker/holistic_landmarker/float16/1/holistic_landmarker.task',
 };
 /** Approximate download sizes (bytes), used for the progress bar before Content-Length is known. */
-const MODEL_BYTES = { lite: 5.8e6, full: 9.4e6, heavy: 30.7e6, 'movenet-lightning': 4.7e6, 'movenet-thunder': 12.5e6, 'movenet-multipose': 9.4e6 };
+const MODEL_BYTES = { lite: 5.8e6, full: 9.4e6, heavy: 30.7e6, holistic: 13.7e6, 'movenet-lightning': 4.7e6, 'movenet-thunder': 12.5e6, 'movenet-multipose': 9.4e6 };
 const MP_WASM_BYTES = 11.8e6;
 
 const MODEL_CACHE = 'kinesphere-models-v1';
@@ -145,6 +146,14 @@ export const STRIDE = 4;
 export const FRAME_SIZE = NUM_LANDMARKS * STRIDE;
 export const MAX_PEOPLE = 6;
 
+/** Hand landmarks (MediaPipe Holistic): 21 points per hand, left hand first then right. */
+export const HAND_LANDMARKS = 21;
+export const HAND_SIZE = 2 * HAND_LANDMARKS * STRIDE;
+export const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
+];
+
 /** MoveNet's 17 COCO keypoints, mapped onto the MediaPipe landmark index they correspond to. */
 export const MOVENET_TO_MP = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
 
@@ -164,6 +173,10 @@ export const ENGINES = [
   {
     id: 'heavy', label: 'MediaPipe Heavy', engine: 'mediapipe', variant: 'heavy', maxPeople: MAX_PEOPLE,
     help: 'Most accurate MediaPipe model and by far the slowest (a 30 MB download). Best for a powerful laptop or desktop with a GPU.',
+  },
+  {
+    id: 'holistic', label: 'MediaPipe Holistic', engine: 'holistic', variant: 'holistic', maxPeople: 1, hands: true,
+    help: 'Pose plus 21 landmarks per hand and a face mesh from one model, so fingers are tracked too. Hands are recorded and replayed; the face is drawn live only. Single person, and slower than Pose Lite (14 MB download).',
   },
   {
     id: 'movenet-lightning', label: 'MoveNet Lightning', engine: 'movenet', variant: 'SinglePose.Lightning', maxPeople: 1,
@@ -254,6 +267,80 @@ async function createMediaPipe(info, people, onStatus) {
     detect(video, timestampMs) {
       const result = landmarker.detectForVideo(video, timestampMs);
       return (result?.landmarks ?? []).map(l => ({ lm: flattenLandmarks(l) }));
+    },
+    close() { landmarker.close(); },
+  };
+}
+
+// ---- MediaPipe Holistic ---------------------------------------------------------------------
+
+/** Flatten a 21-point hand into `out` at `base` (visibility 1: holistic hands carry no score). */
+function flattenHand(points, out, base) {
+  if (!points) return;
+  for (let i = 0; i < HAND_LANDMARKS; i++) {
+    const q = points[i];
+    if (!q) continue;
+    const o = base + i * STRIDE;
+    out[o] = q.x; out[o + 1] = q.y; out[o + 2] = q.z; out[o + 3] = 1;
+  }
+}
+
+async function createHolistic(info, onStatus) {
+  const progress = progressTracker(onStatus);
+  progress.say('Loading MediaPipe…');
+  const { HolisticLandmarker, FilesetResolver } = await loadMediaPipe();
+  const simd = await FilesetResolver.isSimdSupported?.().catch(() => true) ?? true;
+  const wasmName = simd ? 'vision_wasm_internal' : 'vision_wasm_nosimd_internal';
+  progress.expect('wasm', MP_WASM_BYTES);
+  progress.expect('model', MODEL_BYTES.holistic);
+  const cached = (await Promise.all([isCached(`${MP_CDN}/wasm/${wasmName}.wasm`), isCached(MODELS.holistic)])).every(Boolean);
+  progress.say(cached ? 'Loading the Holistic model from cache…' : 'Downloading the MediaPipe runtime and the Holistic model…');
+  const [wasmBytes, modelBytes] = await Promise.all([
+    fetchWithProgress(`${MP_CDN}/wasm/${wasmName}.wasm`, progress.fetcher('wasm'), MP_WASM_BYTES),
+    fetchWithProgress(MODELS.holistic, progress.fetcher('model'), MODEL_BYTES.holistic),
+  ]);
+  const wasmBlobUrl = URL.createObjectURL(new Blob([wasmBytes], { type: 'application/wasm' }));
+  const fileset = { wasmLoaderPath: `${MP_CDN}/wasm/${wasmName}.js`, wasmBinaryPath: wasmBlobUrl };
+  progress.done();
+  onStatus('Starting MediaPipe Holistic…', null);
+  const options = {
+    baseOptions: { modelAssetBuffer: modelBytes, delegate: 'GPU' },
+    runningMode: 'VIDEO',
+    minFaceDetectionConfidence: 0.5,
+    minFaceSuppressionThreshold: 0.5,
+    minFacePresenceConfidence: 0.5,
+    minPoseDetectionConfidence: 0.5,
+    minPoseSuppressionThreshold: 0.5,
+    minPosePresenceConfidence: 0.5,
+    minHandLandmarksConfidence: 0.5,
+    outputFaceBlendshapes: false,
+    outputPoseSegmentationMasks: false,
+  };
+  let landmarker;
+  let delegate = 'GPU';
+  try {
+    landmarker = await HolisticLandmarker.createFromOptions(fileset, options);
+  } catch (err) {
+    console.warn('GPU delegate unavailable, falling back to CPU', err);
+    delegate = 'CPU';
+    options.baseOptions = { modelAssetBuffer: modelBytes.slice(), delegate: 'CPU' };
+    landmarker = await HolisticLandmarker.createFromOptions(fileset, options);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(wasmBlobUrl), 60000);
+  }
+  const contours = (HolisticLandmarker.FACE_LANDMARKS_CONTOURS ?? []).map(c => [c.start, c.end]);
+  return {
+    delegate,
+    hands: true,
+    faceContours: contours,
+    detect(video, timestampMs) {
+      const r = landmarker.detectForVideo(video, timestampMs);
+      const pose = r?.poseLandmarks?.[0];
+      if (!pose) return [];
+      const hands = new Float32Array(HAND_SIZE);
+      flattenHand(r.leftHandLandmarks?.[0], hands, 0);
+      flattenHand(r.rightHandLandmarks?.[0], hands, HAND_LANDMARKS * STRIDE);
+      return [{ lm: flattenLandmarks(pose), hands, face: r.faceLandmarks?.[0] ?? null }];
     },
     close() { landmarker.close(); },
   };
@@ -372,8 +459,10 @@ async function createMoveNet(info, people, onStatus) {
 export async function createPoseDetector({ model = 'lite', people = 1, onStatus = () => {} } = {}) {
   const info = engineInfo(model);
   const n = Math.max(1, Math.min(info.maxPeople, people | 0 || 1));
-  const impl = info.engine === 'movenet' ? await createMoveNet(info, n, onStatus) : await createMediaPipe(info, n, onStatus);
-  return { id: info.id, model: info.id, engine: info.engine, label: info.label, people: n, ...impl };
+  const impl = info.engine === 'movenet' ? await createMoveNet(info, n, onStatus)
+    : info.engine === 'holistic' ? await createHolistic(info, onStatus)
+      : await createMediaPipe(info, n, onStatus);
+  return { id: info.id, model: info.id, engine: info.engine, label: info.label, people: n, hands: false, faceContours: [], ...impl };
 }
 
 /** Convert MediaPipe's landmark objects into a flat Float32Array [x,y,z,visibility]*33. */
@@ -409,14 +498,14 @@ export function poseCentre(lm, offset = 0, minVis = 0.3) {
  * Keeps detected people in stable slots (0..maxPeople-1) between frames, so each dancer keeps
  * the same colour and ends up in the same track of the recording. Matches by detector id when
  * the engine provides one, otherwise by nearest body centre; new people take the slot that has
- * been empty the longest.
+ * been empty the longest. `update()` returns one pose object ({ lm, hands?, face? }) or null per slot.
  */
 export function createTracker(maxPeople) {
   const slots = Array.from({ length: maxPeople }, () => ({ cx: 0, cy: 0, lastSeen: -Infinity, id: null }));
   const MATCH_DIST = 0.3;   // normalised units: how far a person may move between matches
   const MEMORY_MS = 2000;   // how long a slot remembers where its person was
   return {
-    /** @param {{lm: Float32Array, id?: number}[]} poses @returns {(Float32Array|null)[]} */
+    /** @param {{lm: Float32Array, id?: number, hands?: Float32Array, face?: object[]}[]} poses @returns {(object|null)[]} */
     update(poses, now) {
       const out = new Array(maxPeople).fill(null);
       const cands = poses.map(p => ({ ...p, c: poseCentre(p.lm) })).filter(p => p.c);
@@ -452,7 +541,7 @@ export function createTracker(maxPeople) {
         if (k < 0) return;
         const s = slots[k];
         s.cx = p.c[0]; s.cy = p.c[1]; s.lastSeen = now; s.id = p.id ?? null;
-        out[k] = p.lm;
+        out[k] = p;
       });
       return out;
     },
@@ -509,5 +598,61 @@ export function drawSkeleton(ctx, lm, offset, width, height, opts = {}) {
     ctx.arc(p[0], p[1], i >= 1 && i <= 10 ? radius * 0.6 : radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.restore();
+}
+
+/** Draw both hands (HAND_SIZE floats: left hand then right) as 21-point skeletons. */
+export function drawHandSkeleton(ctx, hands, width, height, opts = {}) {
+  if (!hands) return;
+  const { mirror = false, minVis = 0.5, lineWidth = 2, radius = 2, leftColor = '#eb6834', rightColor = '#3987e5', alpha = 1 } = opts;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = lineWidth;
+  for (let h = 0; h < 2; h++) {
+    const base = h * HAND_LANDMARKS * STRIDE;
+    if (hands[base + 3] < minVis) continue; // wrist visibility 0 => hand not detected
+    const color = h === 0 ? leftColor : rightColor;
+    const px = i => {
+      const o = base + i * STRIDE;
+      return [(mirror ? 1 - hands[o] : hands[o]) * width, hands[o + 1] * height];
+    };
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      const pa = px(a), pb = px(b);
+      ctx.beginPath();
+      ctx.moveTo(pa[0], pa[1]);
+      ctx.lineTo(pb[0], pb[1]);
+      ctx.stroke();
+    }
+    for (let i = 0; i < HAND_LANDMARKS; i++) {
+      const p = px(i);
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/** Draw face mesh contour lines from raw landmark objects (live view only, never recorded). */
+export function drawFaceContours(ctx, face, contours, width, height, opts = {}) {
+  if (!face || !contours?.length) return;
+  const { mirror = false, color = '#f4f4f2', lineWidth = 1, alpha = 0.8 } = opts;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const [a, b] of contours) {
+    const pa = face[a], pb = face[b];
+    if (!pa || !pb) continue;
+    ctx.moveTo((mirror ? 1 - pa.x : pa.x) * width, pa.y * height);
+    ctx.lineTo((mirror ? 1 - pb.x : pb.x) * width, pb.y * height);
+  }
+  ctx.stroke();
   ctx.restore();
 }

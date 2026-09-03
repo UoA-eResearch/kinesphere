@@ -3,7 +3,7 @@
 //   draw(ctx, lm, offset, width, height, dt, { mirror, minVis })
 // and keeps its own state (particles, trails) so it animates smoothly between detections.
 
-import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton } from './pose.js';
+import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton, drawHandSkeleton, drawFaceContours } from './pose.js';
 
 /** Colour set per tracked person (slot). Person 1 keeps the classic orange/blue. */
 export const PERSON_COLORS = [
@@ -84,17 +84,46 @@ function neckAndHead(p, minVis) {
   return { nx, ny, hx: p.x[0], hy: p.y[0] - r * 0.15, r };
 }
 
+/**
+ * Hands (recorded) and face contours (live only) that Holistic adds on top of the pose.
+ * `mode` picks a look: 'full' (coloured), 'ghost' (faint white) or 'glow' (neon).
+ */
+function drawExtras(ctx, w, h, opts, mode, hue = 0) {
+  const { hands = null, face = null, faceContours = null, mirror = false, minVis = 0.5, person = 0 } = opts;
+  if (!hands && !face) return;
+  const pc = personColors(person);
+  const thin = Math.max(1.2, w / 640);
+  if (mode === 'ghost') {
+    drawHandSkeleton(ctx, hands, w, h, { mirror, minVis, lineWidth: thin, radius: thin, leftColor: '#fff', rightColor: '#fff', alpha: 0.35 });
+    return;
+  }
+  if (mode === 'glow') {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = hsla(hue, 100, 60);
+    drawHandSkeleton(ctx, hands, w, h, { mirror, minVis, lineWidth: thin * 1.5, radius: thin, leftColor: hsla(hue + 70, 100, 70), rightColor: hsla(hue - 70, 100, 70) });
+    drawFaceContours(ctx, face, faceContours, w, h, { mirror, color: hsla(hue, 100, 75), lineWidth: thin, alpha: 0.7 });
+    ctx.restore();
+    return;
+  }
+  drawHandSkeleton(ctx, hands, w, h, { mirror, minVis, lineWidth: thin * 1.5, radius: thin * 1.3, leftColor: pc.left, rightColor: pc.right });
+  drawFaceContours(ctx, face, faceContours, w, h, { mirror, color: pc.mid, lineWidth: thin, alpha: 0.7 });
+}
+
 // ---- styles -------------------------------------------------------------------------
 
 function skeletonStyle() {
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       if (!lm) return;
       const pc = personColors(person);
       drawSkeleton(ctx, lm, offset, w, h, {
         mirror, minVis, lineWidth: Math.max(2, w / 320), radius: Math.max(3, w / 240),
         leftColor: pc.left, rightColor: pc.right, midColor: pc.mid,
       });
+      drawExtras(ctx, w, h, opts, 'full');
     },
     reset() {},
   };
@@ -102,7 +131,8 @@ function skeletonStyle() {
 
 function stickmanStyle() {
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       if (!lm) return;
       const p = project(lm, offset, w, h, mirror);
       const head = neckAndHead(p, minVis);
@@ -143,6 +173,10 @@ function stickmanStyle() {
         ctx.stroke();
       }
       ctx.restore();
+      if (opts.hands) {
+        drawHandSkeleton(ctx, opts.hands, w, h, { mirror, minVis, lineWidth: thick * 0.45 + 4, radius: 1, leftColor: '#111', rightColor: '#111' });
+        drawHandSkeleton(ctx, opts.hands, w, h, { mirror, minVis, lineWidth: thick * 0.45, radius: 1, leftColor: body, rightColor: body });
+      }
     },
     reset() {},
   };
@@ -151,7 +185,8 @@ function stickmanStyle() {
 function neonStyle() {
   let t = 0;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       t += dt;
       if (!lm) return;
       const p = project(lm, offset, w, h, mirror);
@@ -185,6 +220,7 @@ function neonStyle() {
         }
       }
       ctx.restore();
+      drawExtras(ctx, w, h, opts, 'glow', hue);
     },
     reset() {},
   };
@@ -196,7 +232,8 @@ function trailsStyle() {
   const trails = new Map(JOINTS.map(j => [j, []]));
   let clock = 0;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       clock += dt * 1000;
       const shift = personColors(person).hue;
       const p = lm ? project(lm, offset, w, h, mirror) : null;
@@ -210,6 +247,7 @@ function trailsStyle() {
         ctx.globalAlpha = 0.35;
         drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff', leftColor: personColors(person).left, rightColor: personColors(person).right });
         ctx.globalAlpha = 1;
+        drawExtras(ctx, w, h, opts, 'ghost');
       }
       ctx.globalCompositeOperation = 'lighter';
       ctx.lineCap = 'round';
@@ -241,7 +279,8 @@ function sparksStyle() {
   const particles = [];
   const tracker = makeTracker();
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       const g = h * 0.9; // gravity, px/s^2
       const pc = personColors(person);
       const p = lm ? project(lm, offset, w, h, mirror) : null;
@@ -267,6 +306,7 @@ function sparksStyle() {
         ctx.globalAlpha = 0.3;
         drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff', leftColor: pc.left, rightColor: pc.right });
         ctx.globalAlpha = 1;
+        drawExtras(ctx, w, h, opts, 'ghost');
       }
       ctx.globalCompositeOperation = 'lighter';
       for (let i = particles.length - 1; i >= 0; i--) {
@@ -293,7 +333,8 @@ function constellationStyle() {
   let t = 0;
   let stars = null;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
       t += dt;
       const shift = personColors(person).hue;
       if (!stars || stars.w !== w || stars.h !== h) {
@@ -355,6 +396,7 @@ function constellationStyle() {
           ctx.moveTo(p.x[i], p.y[i] - r * 3); ctx.lineTo(p.x[i], p.y[i] + r * 3);
           ctx.stroke();
         });
+        drawExtras(ctx, w, h, opts, 'ghost');
       }
       ctx.restore();
     },

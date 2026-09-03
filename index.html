@@ -88,6 +88,8 @@
         <dl>
           <dt>MediaPipe (Lite, Full, Heavy)</dt>
           <dd>Google's Pose Landmarker. Tracks 33 landmarks per person, including the face, hands and feet, plus an estimated depth for every joint. Lite is the fastest, Heavy the most accurate and slowest. All three can track several people, but MediaPipe has no memory of who is who: people are kept apart by position, so identities can swap when dancers cross or leave the frame.</dd>
+          <dt>MediaPipe Holistic</dt>
+          <dd>Pose Landmarker's 33 landmarks plus 21 landmarks per hand and a 478-point face mesh, from a single model. Finger movement is tracked, recorded and replayed (sessions are about twice the size); the face mesh is drawn live only, because storing it would fill the browser's session storage in a couple of minutes. Single person, and slower than Pose Lite.</dd>
           <dt>MoveNet (Lightning, Thunder, MultiPose)</dt>
           <dd>Google's TensorFlow.js model. Tracks only 17 joints (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles) and no depth, so the overlay is simpler and the stick figure has no hands or feet. It is often faster than MediaPipe on phones and laptops without a usable GPU. Lightning and Thunder are single-person models; MultiPose tracks up to six people and has a built-in tracker that keeps identities stable.</dd>
           <dt>People</dt>

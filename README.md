@@ -52,6 +52,7 @@ The **Model** selector chooses the pose model, and **People** how many dancers t
 | Model | Landmarks | People | Notes |
 | --- | --- | --- | --- |
 | MediaPipe Lite / Full / Heavy | 33, with face, hands, feet and an estimated depth per joint | up to 6 | Lite is fastest, Heavy most accurate (30 MB download). With several people, MediaPipe returns poses without identities, so the app keeps people apart by position; identities can swap when dancers cross or leave the frame. |
+| MediaPipe Holistic | 33 pose landmarks plus 21 per hand (recorded) and a 478-point face mesh (drawn live only) | 1 | One model for body, hands and face. Fingers show in the overlay and replay; sessions are about twice the size. |
 | MoveNet Lightning / Thunder | 17 (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles), no depth | 1 | TensorFlow.js models, often the smoothest on phones and laptops without a usable GPU. Thunder is the more accurate of the two. |
 | MoveNet MultiPose | 17, no depth | up to 6 | Built-in tracker keeps identities stable across frames. |
 
@@ -101,7 +102,7 @@ An exported session is JSON:
 ```jsonc
 {
   "format": "kinesphere-session",
-  "version": 2,
+  "version": 3,
   "id": "…", "name": "…", "createdAt": "2026-09-02T10:00:00.000Z",
   "durationMs": 220000, "width": 1280, "height": 720,
   "mirrored": true,              // the preview was mirrored; landmarks are in raw camera coordinates
@@ -110,14 +111,18 @@ An exported session is JSON:
   "encoding": { … },             // human-readable description of the fields below
   "times": [0, 33, 66, …],       // ms since the start of the recording, one per frame
   "positions": "base64…",        // little-endian int16 [x, y, z] per landmark, ordered frame → person → landmark; divide by 10000
-  "visibility": "base64…"        // uint8 per landmark in the same order; divide by 255
+  "visibility": "base64…",       // uint8 per landmark in the same order; divide by 255
+  "handLandmarks": 21,           // Holistic sessions only, with:
+  "handPositions": "base64…",    //   42 landmarks per person per frame (left hand, then right), packed like positions
+  "handVisibility": "base64…"    //   1 = hand detected, 0 = not detected
 }
 ```
 
 `people` is the number of tracked slots per frame (1 unless several people were tracked); a
 person who was not detected in a frame has visibility 0 for every landmark. `engine` is
-`mediapipe` or `movenet`; MoveNet files fill only the 17 matching landmark slots and always have
-`z = 0`. Version 1 files (single person, no `engine`/`people`) are still imported.
+`mediapipe`, `holistic` or `movenet`; MoveNet files fill only the 17 matching landmark slots and
+always have `z = 0`. Holistic files add the hand tracks above (the face mesh is never stored).
+Version 1 (single person, no `engine`/`people`) and version 2 (no hands) files are still imported.
 
 `x` and `y` are MediaPipe's normalised image coordinates (0–1 across the frame, y down);
 `z` is depth relative to the hips in roughly the same scale as `x`. Decoding in Python:
@@ -133,6 +138,7 @@ vis = np.frombuffer(base64.b64decode(s["visibility"]), "u1").reshape(s["frameCou
 The CSV export contains the same data with one row per frame and columns
 `t_ms, nose_x, nose_y, nose_z, nose_visibility, left_eye_inner_x, …`. For multi-person sessions
 a leading `person` column (1-based) is added and there is one row per frame per detected person.
+Holistic sessions append `left_hand_0_x … right_hand_20_visibility` columns.
 
 ## Development
 

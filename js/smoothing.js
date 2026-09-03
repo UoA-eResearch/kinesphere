@@ -17,10 +17,13 @@ function alphaFor(cutoff, dt) {
   return 1 / (1 + tau / dt);
 }
 
-/** Smoother for up to `maxPeople` person slots. `apply()` returns a buffer owned by the smoother. */
-export function createSmoother(levelId = DEFAULT_SMOOTHING, maxPeople = 6) {
+/**
+ * Smoother for up to `maxPeople` person slots over buffers of `size` floats (x,y,z,visibility
+ * groups). `apply()` returns a buffer owned by the smoother.
+ */
+export function createSmoother(levelId = DEFAULT_SMOOTHING, maxPeople = 6, size = FRAME_SIZE) {
   const level = SMOOTHING_LEVELS.find(l => l.id === levelId) ?? SMOOTHING_LEVELS[1];
-  const slots = Array.from({ length: maxPeople }, () => ({ x: new Float32Array(FRAME_SIZE), dx: new Float32Array(FRAME_SIZE), primed: false }));
+  const slots = Array.from({ length: maxPeople }, () => ({ x: new Float32Array(size), dx: new Float32Array(size), primed: false }));
   return {
     id: level.id,
     /**
@@ -30,16 +33,16 @@ export function createSmoother(levelId = DEFAULT_SMOOTHING, maxPeople = 6) {
      */
     apply(lm, offset, person, dt) {
       const s = slots[person];
-      if (level.id === 'off') return offset ? lm.subarray(offset, offset + FRAME_SIZE) : lm;
+      if (level.id === 'off') return offset || lm.length !== size ? lm.subarray(offset, offset + size) : lm;
       if (!s.primed || !(dt > 0)) {
-        s.x.set(lm.subarray(offset, offset + FRAME_SIZE));
+        s.x.set(lm.subarray(offset, offset + size));
         s.dx.fill(0);
         s.primed = true;
         return s.x;
       }
       const step = Math.min(dt, 0.25);
       const aD = alphaFor(level.dCutoff, step);
-      for (let i = 0; i < FRAME_SIZE; i++) {
+      for (let i = 0; i < size; i++) {
         const x = lm[offset + i];
         const prev = s.x[i];
         const dx = (x - prev) / step;
