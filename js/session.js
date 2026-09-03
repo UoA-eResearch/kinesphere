@@ -1,17 +1,21 @@
 // Session data model, compact serialisation, localStorage persistence and file export.
 //
 // In memory a session is:
-//   { id, name, createdAt, durationMs, width, height, mirrored, model, trigger,
-//     frameCount, times: Float64Array (ms since start), lm: Float32Array (frameCount*33*4) }
+//   { id, name, createdAt, durationMs, width, height, mirrored, model, engine, people, trigger,
+//     frameCount, times: Float64Array (ms since start),
+//     lm: Float32Array (frameCount * people * 33 * 4) }
+// Landmarks for frame i and person p start at (i * people + p) * FRAME_SIZE. A person who was
+// not detected in a frame has visibility 0 for every landmark.
 //
-// On disk / in localStorage it is JSON (format "kinesphere-session", version 1) with the
+// On disk / in localStorage it is JSON (format "kinesphere-session", version 2) with the
 // landmark positions packed as base64 int16 (x,y,z / 10000) and visibility as base64 uint8 (/255).
+// Version 1 files (single person, no engine field) are still read.
 // Only pose landmarks are ever stored - never video.
 
 import { LANDMARK_NAMES, NUM_LANDMARKS, STRIDE, FRAME_SIZE } from './pose.js';
 
 export const FORMAT = 'kinesphere-session';
-export const VERSION = 1;
+export const VERSION = 2;
 const POS_SCALE = 10000;
 const INDEX_KEY = 'kinesphere:sessions';
 const keyFor = id => `kinesphere:session:${id}`;
@@ -30,14 +34,15 @@ export function defaultName(d = new Date()) {
   return `Session ${date} ${time}`;
 }
 
-/** Build a session object from recorded frames [{ t, lm: Float32Array(132) }]. */
-export function buildSession({ frames, width, height, model, trigger, startedAt, mirrored = true }) {
+/** Build a session from recorded frames [{ t, lm: Float32Array(people * 132) }]. */
+export function buildSession({ frames, width, height, model, engine, people = 1, trigger, startedAt, mirrored = true }) {
   const n = frames.length;
+  const stride = people * FRAME_SIZE;
   const times = new Float64Array(n);
-  const lm = new Float32Array(n * FRAME_SIZE);
+  const lm = new Float32Array(n * stride);
   frames.forEach((f, i) => {
     times[i] = f.t;
-    lm.set(f.lm, i * FRAME_SIZE);
+    lm.set(f.lm.subarray(0, stride), i * stride);
   });
   const started = new Date(startedAt ?? Date.now());
   return {
@@ -48,10 +53,36 @@ export function buildSession({ frames, width, height, model, trigger, startedAt,
     width, height,
     mirrored: mirrored !== false,
     model: model ?? 'lite',
+    engine: engine ?? 'mediapipe',
+    people,
     trigger: trigger ?? 'button',
     frameCount: n,
     times, lm,
   };
+}
+
+/** Offset into session.lm of frame `i`, person `p`. */
+export function frameOffset(session, i, p = 0) {
+  return (i * (session.people || 1) + p) * FRAME_SIZE;
+}
+
+/** True when the person has any visible landmark in that frame. */
+export function personPresent(lm, offset) {
+  for (let k = 0; k < NUM_LANDMARKS; k++) if (lm[offset + k * STRIDE + 3] > 0) return true;
+  return false;
+}
+
+/** A single-person view of one tracked person, suitable for analyze(). */
+export function personView(session, slot) {
+  const people = session.people || 1;
+  if (people === 1 && slot === 0) return session;
+  const n = session.frameCount;
+  const lm = new Float32Array(n * FRAME_SIZE);
+  for (let i = 0; i < n; i++) {
+    const o = (i * people + slot) * FRAME_SIZE;
+    lm.set(session.lm.subarray(o, o + FRAME_SIZE), i * FRAME_SIZE);
+  }
+  return { ...session, people: 1, lm };
 }
 
 // ---- base64 helpers ------------------------------------------------------------------
@@ -76,20 +107,18 @@ function b64ToBytes(b64) {
 
 export function serialize(session) {
   const n = session.frameCount;
-  const pos = new DataView(new ArrayBuffer(n * NUM_LANDMARKS * 3 * 2));
-  const vis = new Uint8Array(n * NUM_LANDMARKS);
+  const people = session.people || 1;
+  const total = n * people * NUM_LANDMARKS;
+  const pos = new DataView(new ArrayBuffer(total * 3 * 2));
+  const vis = new Uint8Array(total);
   const { lm } = session;
-  let j = 0;
-  for (let i = 0; i < n; i++) {
-    for (let k = 0; k < NUM_LANDMARKS; k++) {
-      const o = (i * NUM_LANDMARKS + k) * STRIDE;
-      for (let c = 0; c < 3; c++) {
-        const q = Math.max(-32768, Math.min(32767, Math.round(lm[o + c] * POS_SCALE)));
-        pos.setInt16(j * 2, q, true);
-        j++;
-      }
-      vis[i * NUM_LANDMARKS + k] = Math.round(Math.max(0, Math.min(1, lm[o + 3])) * 255);
+  for (let idx = 0; idx < total; idx++) {
+    const o = idx * STRIDE;
+    for (let c = 0; c < 3; c++) {
+      const q = Math.max(-32768, Math.min(32767, Math.round(lm[o + c] * POS_SCALE)));
+      pos.setInt16((idx * 3 + c) * 2, q, true);
     }
+    vis[idx] = Math.round(Math.max(0, Math.min(1, lm[o + 3])) * 255);
   }
   return JSON.stringify({
     format: FORMAT,
@@ -102,13 +131,16 @@ export function serialize(session) {
     height: session.height,
     mirrored: session.mirrored,
     model: session.model,
+    engine: session.engine ?? 'mediapipe',
+    people,
     trigger: session.trigger,
     frameCount: n,
     landmarkNames: LANDMARK_NAMES,
     encoding: {
       times: 'milliseconds since the start of the recording, one per frame',
-      positions: 'base64 of little-endian int16 triples [x, y, z] per landmark per frame (frame-major); divide by 10000 to get MediaPipe normalised image coordinates',
-      visibility: 'base64 of uint8, one per landmark per frame; divide by 255',
+      positions: 'base64 of little-endian int16 triples [x, y, z] per landmark, ordered frame -> person -> landmark; divide by 10000 to get MediaPipe normalised image coordinates',
+      visibility: 'base64 of uint8, one per landmark in the same order; divide by 255. A person with visibility 0 everywhere was not detected in that frame',
+      movenet: 'when engine is "movenet" only the 17 COCO joints are filled (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles); z is always 0',
     },
     times: Array.from(session.times, t => Math.round(t)),
     positions: bytesToB64(new Uint8Array(pos.buffer)),
@@ -119,25 +151,24 @@ export function serialize(session) {
 export function deserialize(text) {
   const j = typeof text === 'string' ? JSON.parse(text) : text;
   if (!j || j.format !== FORMAT) throw new Error('Not a Kinesphere session file');
-  if (j.version !== VERSION) throw new Error(`Unsupported session version ${j.version}`);
+  if (j.version !== 1 && j.version !== VERSION) throw new Error(`Unsupported session version ${j.version}`);
   const n = j.frameCount | 0;
+  const people = Math.max(1, j.people | 0 || 1);
   if (!Array.isArray(j.times) || j.times.length !== n) throw new Error('Corrupt session: times');
   const posBytes = b64ToBytes(j.positions);
   const visBytes = b64ToBytes(j.visibility);
-  if (posBytes.length !== n * NUM_LANDMARKS * 6 || visBytes.length !== n * NUM_LANDMARKS) {
+  const total = n * people * NUM_LANDMARKS;
+  if (posBytes.length !== total * 6 || visBytes.length !== total) {
     throw new Error('Corrupt session: landmark data length mismatch');
   }
   const pos = new DataView(posBytes.buffer, posBytes.byteOffset, posBytes.byteLength);
-  const lm = new Float32Array(n * FRAME_SIZE);
-  let p = 0;
-  for (let i = 0; i < n; i++) {
-    for (let k = 0; k < NUM_LANDMARKS; k++) {
-      const o = (i * NUM_LANDMARKS + k) * STRIDE;
-      lm[o] = pos.getInt16(p, true) / POS_SCALE; p += 2;
-      lm[o + 1] = pos.getInt16(p, true) / POS_SCALE; p += 2;
-      lm[o + 2] = pos.getInt16(p, true) / POS_SCALE; p += 2;
-      lm[o + 3] = visBytes[i * NUM_LANDMARKS + k] / 255;
-    }
+  const lm = new Float32Array(total * STRIDE);
+  for (let idx = 0; idx < total; idx++) {
+    const o = idx * STRIDE;
+    lm[o] = pos.getInt16(idx * 6, true) / POS_SCALE;
+    lm[o + 1] = pos.getInt16(idx * 6 + 2, true) / POS_SCALE;
+    lm[o + 2] = pos.getInt16(idx * 6 + 4, true) / POS_SCALE;
+    lm[o + 3] = visBytes[idx] / 255;
   }
   return {
     id: String(j.id || makeId()),
@@ -148,6 +179,8 @@ export function deserialize(text) {
     height: Number(j.height) || 720,
     mirrored: j.mirrored !== false,
     model: j.model || 'unknown',
+    engine: j.engine || 'mediapipe',
+    people,
     trigger: j.trigger || 'unknown',
     frameCount: n,
     times: Float64Array.from(j.times),
@@ -172,6 +205,7 @@ function metaOf(session, bytes) {
   return {
     id: session.id, name: session.name, createdAt: session.createdAt,
     durationMs: session.durationMs, frameCount: session.frameCount, bytes,
+    people: session.people || 1, engine: session.engine || 'mediapipe', model: session.model,
   };
 }
 
@@ -227,16 +261,21 @@ export const store = {
 
 // ---- export ----------------------------------------------------------------------------
 
+/** One row per frame (and per detected person when the session tracked several). */
 export function toCSV(session) {
-  const header = ['t_ms'];
+  const people = session.people || 1;
+  const header = people > 1 ? ['person', 't_ms'] : ['t_ms'];
   for (const name of LANDMARK_NAMES) header.push(`${name}_x`, `${name}_y`, `${name}_z`, `${name}_visibility`);
   const rows = [header.join(',')];
   const { lm, times, frameCount } = session;
   for (let i = 0; i < frameCount; i++) {
-    const cells = [Math.round(times[i])];
-    const base = i * FRAME_SIZE;
-    for (let j = 0; j < FRAME_SIZE; j++) cells.push(lm[base + j].toFixed(4));
-    rows.push(cells.join(','));
+    for (let p = 0; p < people; p++) {
+      const base = frameOffset(session, i, p);
+      if (people > 1 && !personPresent(lm, base)) continue;
+      const cells = people > 1 ? [p + 1, Math.round(times[i])] : [Math.round(times[i])];
+      for (let j = 0; j < FRAME_SIZE; j++) cells.push(lm[base + j].toFixed(4));
+      rows.push(cells.join(','));
+    }
   }
   return rows.join('\n');
 }

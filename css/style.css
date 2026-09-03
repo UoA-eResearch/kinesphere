@@ -198,6 +198,21 @@ select, input[type="text"] {
 }
 .controls { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: center; justify-content: center; }
 .hint { text-align: center; color: var(--muted); font-size: 0.88rem; }
+.setting-help { text-align: center; color: var(--ink-2); font-size: 0.85rem; max-width: 70ch; margin: -0.25rem auto 0; min-height: 1.2em; }
+.help-panel { max-width: 72ch; margin: 0 auto; font-size: 0.9rem; color: var(--ink-2); }
+.help-panel summary { cursor: pointer; color: var(--accent); text-align: center; }
+.help-panel dl { margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+.help-panel dt { font-weight: 650; color: var(--ink); }
+.help-panel dd { margin: 0 0 0.25rem; }
+.help-panel[open] { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1.25rem 1rem; }
+.person-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.person-tabs .tab {
+  display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  border-radius: 999px; padding: 0.35rem 0.85rem; font: inherit; font-weight: 550; cursor: pointer;
+}
+.person-tabs .tab.is-active { background: var(--ink); color: var(--bg); border-color: transparent; }
+.person-tabs .tab .swatch { width: 12px; height: 12px; border-radius: 50%; margin: 0; }
+.person-tabs .tab small { font-weight: 400; opacity: 0.75; }
 .error-box { background: var(--warn-bg); color: var(--warn-ink); padding: 0.75rem 1rem; border-radius: 10px; }
 
 /* Cards / dashboard */

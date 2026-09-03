@@ -50,13 +50,20 @@ function angleDeg(ax, ay, bx, by, cx, cy) {
   return Math.acos(clamp((v1x * v2x + v1y * v2y) / d, -1, 1)) * 180 / Math.PI;
 }
 
-/** Centered moving average (radius r frames) of a Float32Array. */
-function smoothFrames(arr, r) {
+/**
+ * Centered moving average (radius r frames) of a Float32Array. Frames where `mask` is false
+ * (landmark not visible) are left out of the average, so a person entering the frame is not
+ * smeared towards the zeros recorded while they were absent.
+ */
+function smoothFrames(arr, r, mask) {
   const n = arr.length, out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     let s = 0, c = 0;
-    for (let j = Math.max(0, i - r); j <= Math.min(n - 1, i + r); j++) { s += arr[j]; c++; }
-    out[i] = s / c;
+    for (let j = Math.max(0, i - r); j <= Math.min(n - 1, i + r); j++) {
+      if (mask && !mask[j]) continue;
+      s += arr[j]; c++;
+    }
+    out[i] = c ? s / c : arr[i];
   }
   return out;
 }
@@ -141,7 +148,9 @@ export function analyze(session) {
       const o = (i * NUM_LANDMARKS + k) * STRIDE;
       xs[i] = lm[o] * aspect; ys[i] = lm[o + 1]; vs[i] = lm[o + 3];
     }
-    X[k] = smoothFrames(xs, 2); Y[k] = smoothFrames(ys, 2); V[k] = vs;
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) mask[i] = vs[i] >= VIS_MIN ? 1 : 0;
+    X[k] = smoothFrames(xs, 2, mask); Y[k] = smoothFrames(ys, 2, mask); V[k] = vs;
   }
   const visible = (k, i) => V[k][i] >= VIS_MIN;
   const valid = new Uint8Array(n);

@@ -67,14 +67,28 @@
         <label class="select" id="camera-wrap" hidden>Camera
           <select id="sel-camera" aria-label="Camera"></select>
         </label>
-        <label class="select">Model
-          <select id="sel-model">
-            <option value="lite" selected>Lite (fastest)</option>
-            <option value="full">Full</option>
-            <option value="heavy">Heavy (most accurate)</option>
-          </select>
+        <label class="select" title="Which pose model runs on the video. MediaPipe gives 33 landmarks with depth; MoveNet gives 17 joints and is often faster on devices without a GPU.">Model
+          <select id="sel-model" aria-label="Pose model"></select>
         </label>
+        <label class="select" title="How many dancers to track at once. Each extra person costs speed, and the dashboard shows one tab per person.">People
+          <select id="sel-people" aria-label="Number of people to track"></select>
+        </label>
+        <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="About these settings">?</button>
       </div>
+      <p id="setting-help" class="setting-help"></p>
+      <details id="help-panel" class="help-panel">
+        <summary>About the model and people settings</summary>
+        <dl>
+          <dt>MediaPipe (Lite, Full, Heavy)</dt>
+          <dd>Google's Pose Landmarker. Tracks 33 landmarks per person, including the face, hands and feet, plus an estimated depth for every joint. Lite is the fastest, Heavy the most accurate and slowest. All three can track several people, but MediaPipe has no memory of who is who: people are kept apart by position, so identities can swap when dancers cross or leave the frame.</dd>
+          <dt>MoveNet (Lightning, Thunder, MultiPose)</dt>
+          <dd>Google's TensorFlow.js model. Tracks only 17 joints (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles) and no depth, so the overlay is simpler and the stick figure has no hands or feet. It is often faster than MediaPipe on phones and laptops without a usable GPU. Lightning and Thunder are single-person models; MultiPose tracks up to six people and has a built-in tracker that keeps identities stable.</dd>
+          <dt>People</dt>
+          <dd>How many dancers to track at the same time (up to six). Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
+          <dt>What does not change</dt>
+          <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, speed and space are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB).</dd>
+        </dl>
+      </details>
       <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay, <kbd>V</kbd> to show or hide the camera feed, <kbd>S</kbd> for the next overlay style.</p>
     </section>
 

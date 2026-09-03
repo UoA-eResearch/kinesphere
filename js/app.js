@@ -1,11 +1,15 @@
 // Kinesphere: live pose view + recording, analysis dashboard and session library.
 
-import { createPoseDetector, flattenLandmarks, handsAboveHead, FRAME_SIZE } from './pose.js';
-import { store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError } from './session.js';
+import {
+  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE,
+} from './pose.js';
+import {
+  store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, personPresent,
+} from './session.js';
 import { analyze, KINESPHERE_CLASSES, GRID_ROWS, GRID_COLS, MAJOR_NAMES } from './analysis.js';
 import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
-import { STYLES, DEFAULT_STYLE, createEffect } from './effects.js';
+import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -18,6 +22,8 @@ const OVERLAY_KEY = 'kinesphere:overlay';
 const VIDEO_KEY = 'kinesphere:video';
 const CAMERA_KEY = 'kinesphere:camera';
 const STYLE_KEY = 'kinesphere:style';
+const MODEL_KEY = 'kinesphere:model';
+const PEOPLE_KEY = 'kinesphere:people';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -29,7 +35,9 @@ const TEMPLATE_POSE = [
 const ui = {
   video: $('#video'), canvas: $('#overlay'), stage: $('#stage'), placeholder: $('#stage-placeholder'),
   cameraError: $('#camera-error'), cameraStatus: $('#camera-status'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
-  chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'), status: $('#status'), fps: $('#fps'),
+  chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selPeople: $('#sel-people'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'),
+  settingHelp: $('#setting-help'), helpPanel: $('#help-panel'), btnHelp: $('#btn-help'),
+  status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
   views: { live: $('#view-live'), dashboard: $('#view-dashboard'), sessions: $('#view-sessions') },
@@ -42,16 +50,17 @@ const overlayCtx = ui.canvas.getContext('2d');
 
 const state = {
   view: 'live',
-  detector: null, detectorPromise: null,
+  detector: null, detectorPromise: null, detecting: false,
+  tracker: createTracker(1), effects: [],
   stream: null, deviceId: null, mirrored: true, loopRunning: false, lastVideoTime: -1,
   recording: null, countdown: null, hold: null, lockoutUntil: 0,
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
   showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
   showVideo: localStorage.getItem(VIDEO_KEY) !== 'off',
-  effect: createEffect(localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE),
-  lastLm: null, lastLmAt: 0, lastRender: 0,
-  current: null,        // { session, analysis, saved, saveError }
+  styleId: localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE,
+  lastPeople: null, lastPeopleAt: 0, lastRender: 0,
+  current: null,        // { session, analyses, person, saved, saveError }
   charts: [], replay: null,
 };
 
@@ -101,6 +110,42 @@ function currentTheme() {
 }
 function onThemeChanged() {
   if (state.current && state.view === 'dashboard') renderDashboard();
+}
+
+// ---------------------------------------------------------------------------------------
+// Detection settings (model + number of people)
+
+function settings() {
+  const info = engineInfo(ui.selModel.value);
+  const people = clamp(Number(ui.selPeople.value) || 1, 1, info.maxPeople);
+  return { model: info.id, people, info };
+}
+
+/** Keep the People selector consistent with the chosen model and explain the implications. */
+function syncSettingsUI() {
+  const info = engineInfo(ui.selModel.value);
+  const wanted = Number(ui.selPeople.value) || 1;
+  if (wanted > info.maxPeople) ui.selPeople.value = String(info.maxPeople);
+  ui.selPeople.disabled = info.maxPeople === 1 || Boolean(state.recording);
+  const people = Number(ui.selPeople.value) || 1;
+  let peopleNote;
+  if (info.maxPeople === 1) peopleNote = 'This model tracks one person only; pick MediaPipe or MoveNet MultiPose to track a group.';
+  else if (people > 1) peopleNote = `Tracking up to ${people} people: expect a lower frame rate, one dashboard tab per person, and pose control reacting to anyone's raised hands.`;
+  else peopleNote = 'Tracking one person.';
+  ui.settingHelp.textContent = `${info.help} ${peopleNote}`;
+  localStorage.setItem(MODEL_KEY, info.id);
+  localStorage.setItem(PEOPLE_KEY, String(people));
+}
+
+function onSettingsChanged() {
+  syncSettingsUI();
+  if (!state.stream) return;
+  ui.btnRecord.disabled = true;
+  ui.hudRecord.disabled = true;
+  ensureDetector().then(
+    () => { ui.btnRecord.disabled = false; ui.hudRecord.disabled = false; },
+    err => { console.error(err); toast(`Could not load the model: ${err.message}`, 6000); setStatus(`Could not load the model: ${err.message}`); },
+  );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -168,10 +213,10 @@ async function attachStream(stream, requestedDeviceId = null) {
   });
   try { await ui.video.play(); } catch { /* autoplay is muted so this should not fail */ }
   resizeCanvas();
-  const settings = stream.getVideoTracks()[0]?.getSettings?.() ?? {};
-  state.deviceId = requestedDeviceId || settings.deviceId || null;
+  const settingsOf = stream.getVideoTracks()[0]?.getSettings?.() ?? {};
+  state.deviceId = requestedDeviceId || settingsOf.deviceId || null;
   // Rear (environment-facing) cameras show the scene as it is; everything else is a mirror.
-  state.mirrored = settings.facingMode !== 'environment';
+  state.mirrored = settingsOf.facingMode !== 'environment';
   ui.stage.classList.toggle('no-mirror', !state.mirrored);
   await refreshCameraList();
 }
@@ -243,20 +288,12 @@ async function startCamera() {
   } catch (err) {
     console.error(err);
     setStatus(`Could not load the pose model: ${err.message}`);
-    toast('MediaPipe could not be loaded. Check your network connection and reload.');
+    toast('The pose model could not be loaded. Check your network connection and reload.', 6000);
     return;
   }
   ui.btnRecord.disabled = false;
   ui.hudRecord.disabled = false;
   startLoop();
-}
-
-function setOverlay(on) {
-  state.showOverlay = on;
-  localStorage.setItem(OVERLAY_KEY, on ? 'on' : 'off');
-  ui.btnOverlay.textContent = on ? 'Overlay: on' : 'Overlay: off';
-  ui.btnOverlay.setAttribute('aria-pressed', String(on));
-  if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
 }
 
 /** Show or hide the camera feed. The stream keeps running so detection and recording continue. */
@@ -268,16 +305,30 @@ function setVideo(on) {
   ui.btnVideo.setAttribute('aria-pressed', String(on));
 }
 
+function setOverlay(on) {
+  state.showOverlay = on;
+  localStorage.setItem(OVERLAY_KEY, on ? 'on' : 'off');
+  ui.btnOverlay.textContent = on ? 'Overlay: on' : 'Overlay: off';
+  ui.btnOverlay.setAttribute('aria-pressed', String(on));
+  if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
+}
+
+function rebuildEffects() {
+  const n = state.detector?.people ?? 1;
+  state.effects = Array.from({ length: n }, () => createEffect(state.styleId));
+}
+
 function setStyle(id) {
-  state.effect = createEffect(id);
-  localStorage.setItem(STYLE_KEY, state.effect.id);
-  ui.selStyle.value = state.effect.id;
-  ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.effect.id)?.label ?? state.effect.id}`;
+  state.styleId = createEffect(id).id;
+  localStorage.setItem(STYLE_KEY, state.styleId);
+  ui.selStyle.value = state.styleId;
+  ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.styleId)?.label ?? state.styleId}`;
+  rebuildEffects();
   if (!state.showOverlay) setOverlay(true);
 }
 
 function nextStyle() {
-  const i = STYLES.findIndex(st => st.id === state.effect.id);
+  const i = STYLES.findIndex(st => st.id === state.styleId);
   setStyle(STYLES[(i + 1) % STYLES.length].id);
 }
 
@@ -299,15 +350,27 @@ function resizeCanvas() {
   }
 }
 
+/** Create (or re-create) the detector for the current model and people settings. */
 function ensureDetector() {
-  const model = ui.selModel.value;
-  if (state.detector && state.detector.model === model) return Promise.resolve(state.detector);
+  const { model, people } = settings();
+  if (state.detector && state.detector.model === model && state.detector.people === people) return Promise.resolve(state.detector);
   if (state.detectorPromise) return state.detectorPromise;
   const old = state.detector;
   state.detector = null;
-  state.detectorPromise = createPoseDetector({ model, onStatus: setStatus }).then(
-    d => { state.detector = d; state.detectorPromise = null; old?.close(); return d; },
-    err => { state.detectorPromise = null; throw err; },
+  state.lastPeople = null;
+  state.detectorPromise = createPoseDetector({ model, people, onStatus: setStatus }).then(
+    d => {
+      state.detector = d;
+      state.detectorPromise = null;
+      state.tracker = createTracker(d.people);
+      rebuildEffects();
+      old?.close();
+      // settings may have changed again while this one was loading
+      const now = settings();
+      if (now.model !== d.model || now.people !== d.people) return ensureDetector();
+      return d;
+    },
+    err => { state.detectorPromise = null; if (old) state.detector = old; throw err; },
   );
   return state.detectorPromise;
 }
@@ -324,21 +387,24 @@ function loop(now) {
     return;
   }
   const v = ui.video;
-  if (state.detector && v.readyState >= 2 && v.currentTime !== state.lastVideoTime) {
+  if (state.detector && !state.detecting && v.readyState >= 2 && v.currentTime !== state.lastVideoTime) {
     state.lastVideoTime = v.currentTime;
     resizeCanvas();
     const ts = performance.now();
-    let lm = null;
-    try {
-      const result = state.detector.detect(v, ts);
-      const first = result?.landmarks?.[0];
-      if (first) lm = flattenLandmarks(first);
-    } catch (err) {
-      console.error(err);
-    }
-    state.lastLm = lm;
-    state.lastLmAt = ts;
-    onDetection(lm, ts);
+    const detector = state.detector;
+    state.detecting = true;
+    let result;
+    try { result = detector.detect(v, ts); } catch (err) { console.error(err); result = []; }
+    Promise.resolve(result).then(
+      poses => {
+        if (state.detector !== detector) return; // settings changed mid-flight
+        const slots = state.tracker.update(poses ?? [], ts);
+        state.lastPeople = slots;
+        state.lastPeopleAt = ts;
+        onDetection(slots, ts);
+      },
+      err => console.error(err),
+    ).finally(() => { state.detecting = false; });
   }
   renderOverlay(now);
   requestAnimationFrame(loop);
@@ -350,18 +416,25 @@ function renderOverlay(now) {
   state.lastRender = now;
   const { width, height } = ui.canvas;
   overlayCtx.clearRect(0, 0, width, height);
-  if (!state.showOverlay) return;
-  const lm = state.lastLm && now - state.lastLmAt < 600 ? state.lastLm : null;
-  state.effect.draw(overlayCtx, lm, 0, width, height, dt, {});
+  if (!state.showOverlay || !state.detector) return;
+  const slots = state.lastPeople && now - state.lastPeopleAt < 600 ? state.lastPeople : null;
+  const minVis = minVisibilityFor(state.detector.engine);
+  state.effects.forEach((effect, p) => effect.draw(overlayCtx, slots?.[p] ?? null, 0, width, height, dt, { person: p, minVis }));
+  if (slots && state.detector.people > 1) {
+    slots.forEach((lm, p) => { if (lm) drawPersonBadge(overlayCtx, lm, 0, width, height, p, { mirrorText: state.mirrored, minVis }); });
+  }
 }
 
-function onDetection(lm, now) {
+function onDetection(slots, now) {
+  const present = slots.filter(Boolean);
   state.fps.count++;
   if (now - state.fps.since >= 1000) {
     const fps = state.fps.count * 1000 / (now - state.fps.since);
     state.fps.count = 0;
     state.fps.since = now;
-    ui.fps.textContent = `${fps.toFixed(0)} fps · ${state.detector.model} · ${state.detector.delegate}`;
+    const d = state.detector;
+    const who = d.people > 1 ? ` · ${present.length}/${d.people} people` : '';
+    ui.fps.textContent = `${fps.toFixed(0)} fps · ${d.label} · ${d.delegate}${who}`;
   }
 
   if (state.countdown) {
@@ -378,19 +451,22 @@ function onDetection(lm, now) {
 
   if (state.recording) {
     const rec = state.recording;
-    if (lm && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
-      rec.frames.push({ t: now - rec.startedAt, lm });
+    if (present.length && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
+      const frame = new Float32Array(rec.people * FRAME_SIZE);
+      slots.forEach((lm, p) => { if (lm && p < rec.people) frame.set(lm, p * FRAME_SIZE); });
+      rec.frames.push({ t: now - rec.startedAt, lm: frame });
       rec.lastStored = now;
     }
     ui.recTime.textContent = fmtClock(now - rec.startedAt);
   }
 
-  updateGesture(lm, now);
-  updateStatus(lm);
+  updateGesture(present, now);
+  updateStatus(present.length);
 }
 
-function updateGesture(lm, now) {
-  const active = ui.chkGesture.checked && lm && !state.countdown && now >= state.lockoutUntil && handsAboveHead(lm);
+function updateGesture(present, now) {
+  const minVis = minVisibilityFor(state.detector?.engine);
+  const active = ui.chkGesture.checked && !state.countdown && now >= state.lockoutUntil && present.some(lm => handsAboveHead(lm, 0, minVis));
   if (!active) {
     if (state.hold) { state.hold = null; ui.hold.hidden = true; }
     return;
@@ -410,13 +486,15 @@ function updateGesture(lm, now) {
   }
 }
 
-function updateStatus(lm) {
+function updateStatus(count) {
+  const people = state.detector?.people ?? 1;
+  const who = people > 1 ? (count === 1 ? '1 person detected.' : `${count} people detected.`) : 'Pose detected.';
   let msg;
   if (state.countdown) msg = 'Get ready…';
   else if (state.recording) msg = 'Recording. Press Stop, or raise both hands above your head to finish.';
-  else if (!lm) msg = 'No pose detected. Step back so your whole body is visible.';
-  else if (ui.chkGesture.checked) msg = 'Pose detected. Press Record, or raise both hands above your head to start.';
-  else msg = 'Pose detected. Press Record to start.';
+  else if (!count) msg = people > 1 ? 'Nobody detected yet. Step back so whole bodies are visible.' : 'No pose detected. Step back so your whole body is visible.';
+  else if (ui.chkGesture.checked) msg = `${who} Press Record, or raise both hands above your head to start.`;
+  else msg = `${who} Press Record to start.`;
   setStatus(msg);
 }
 
@@ -427,7 +505,7 @@ function startRecording(trigger, now = performance.now()) {
   if (state.recording || !state.detector) return;
   state.countdown = null;
   ui.countdown.hidden = true;
-  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger };
+  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people };
   ui.stage.classList.add('is-recording');
   ui.recBadge.hidden = false;
   ui.recTime.textContent = '0:00';
@@ -436,6 +514,7 @@ function startRecording(trigger, now = performance.now()) {
   ui.hudRecord.hidden = true;
   ui.hudStop.hidden = false;
   ui.selModel.disabled = true;
+  ui.selPeople.disabled = true;
   ui.selCamera.disabled = true;
 }
 
@@ -452,6 +531,7 @@ function stopRecording(trimBeforeT = null) {
   ui.hudStop.hidden = true;
   ui.selModel.disabled = false;
   ui.selCamera.disabled = false;
+  syncSettingsUI();
   let frames = rec.frames;
   if (trimBeforeT != null) frames = frames.filter(f => f.t < trimBeforeT);
   if (frames.length < 10) {
@@ -463,6 +543,8 @@ function stopRecording(trimBeforeT = null) {
     width: ui.video.videoWidth || 1280,
     height: ui.video.videoHeight || 720,
     model: state.detector?.model,
+    engine: state.detector?.engine,
+    people: rec.people,
     trigger: rec.trigger,
     startedAt: rec.wallStart,
     mirrored: state.mirrored,
@@ -474,8 +556,9 @@ function stopRecording(trimBeforeT = null) {
 // Sessions
 
 function openSession(session, { save = false } = {}) {
-  const analysis = analyze(session);
-  state.current = { session, analysis, saved: false, saveError: null };
+  const analyses = Array.from({ length: session.people || 1 }, (_, p) => analyze(personView(session, p)));
+  const person = Math.max(0, analyses.findIndex(a => a.ok));
+  state.current = { session, analyses, person, saved: false, saveError: null };
   if (save) {
     try {
       store.save(session);
@@ -512,6 +595,13 @@ async function importFile(file) {
   }
 }
 
+function describeSession(s) {
+  const info = ENGINES.find(e => e.id === s.model);
+  const modelText = info ? info.label : `${escapeHtml(s.model)} model`;
+  const people = (s.people || 1) > 1 ? ` · ${s.people} people` : '';
+  return `${modelText}${people}`;
+}
+
 // ---------------------------------------------------------------------------------------
 // Dashboard
 
@@ -520,20 +610,28 @@ function stat(label, value, unit = '') {
 }
 
 function renderDashboard() {
-  const { session, analysis: a, saved, saveError } = state.current;
+  const { session, analyses, person, saved, saveError } = state.current;
+  const a = analyses[person];
   for (const c of state.charts) c.destroy?.();
   state.charts = [];
   state.replay?.destroy();
   state.replay = null;
 
+  const people = session.people || 1;
   const fpsText = a.ok ? ` · ${a.fps.toFixed(0)} fps` : '';
   const triggerText = session.trigger === 'pose' ? 'started by pose' : session.trigger === 'button' ? 'started by button' : '';
+  const tabs = people > 1 ? `
+    <div class="person-tabs" role="tablist" aria-label="Person">
+      ${analyses.map((an, p) => `<button class="tab${p === person ? ' is-active' : ''}" role="tab" data-person="${p}" aria-selected="${p === person}">
+        <i class="swatch" style="background:${personColors(p).left}"></i>Person ${p + 1}
+        <small>${an.ok ? `${fmtPct(an.validFraction)} tracked` : 'no data'}</small></button>`).join('')}
+    </div>` : '';
   const root = ui.views.dashboard;
   root.innerHTML = `
     <div class="dash-header">
       <div>
         <input id="session-name" class="name-input" type="text" value="${escapeHtml(session.name)}" aria-label="Session name" spellcheck="false">
-        <div class="meta">${escapeHtml(fmtDate(session.createdAt))} · ${fmtDuration(session.durationMs)} · ${session.frameCount} frames${fpsText} · ${escapeHtml(session.model)} model${triggerText ? ` · ${triggerText}` : ''}</div>
+        <div class="meta">${escapeHtml(fmtDate(session.createdAt))} · ${fmtDuration(session.durationMs)} · ${session.frameCount} frames${fpsText} · ${describeSession(session)}${triggerText ? ` · ${triggerText}` : ''}</div>
       </div>
       <div class="dash-actions">
         <button class="btn" data-action="export-json">Export JSON</button>
@@ -543,10 +641,9 @@ function renderDashboard() {
       </div>
     </div>
     ${saveError ? `<div class="banner banner-warn"><b>Not saved.</b> ${escapeHtml(saveError)}</div>` : ''}
-    ${!saved && !saveError ? '' : ''}
     <section class="card">
       <h2>Replay</h2>
-      <p class="card-sub">The recorded pose, as you saw it on screen. Scrub to move the cursor on the charts below.</p>
+      <p class="card-sub">The recorded pose${people > 1 ? 's' : ''}, as you saw ${people > 1 ? 'them' : 'it'} on screen. Scrub to move the cursor on the charts below.</p>
       <div class="replay"><canvas id="replay-canvas"></canvas></div>
       <div class="replay-controls">
         <button class="btn" id="replay-play" aria-label="Play">▶</button>
@@ -554,7 +651,8 @@ function renderDashboard() {
         <span id="replay-time" class="mono">0:00 / ${fmtClock(session.durationMs)}</span>
       </div>
     </section>
-    ${a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse this session. ${escapeHtml(a.reason)}</div>`}
+    ${tabs}
+    ${a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
   `;
 
   root.querySelector('#session-name').addEventListener('change', e => {
@@ -576,6 +674,9 @@ function renderDashboard() {
     setView('sessions');
   };
   root.querySelector('[data-action="new"]').onclick = () => setView('live');
+  root.querySelectorAll('.person-tabs .tab').forEach(tab => {
+    tab.onclick = () => { state.current.person = Number(tab.dataset.person); renderDashboard(); };
+  });
 
   const onTime = t => { for (const c of state.charts) c.setCursor?.(t); };
   state.replay = setupReplay(session, root, onTime);
@@ -713,7 +814,9 @@ function setupReplay(session, root, onTime) {
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   const { times, lm, durationMs } = session;
-  const effect = createEffect(state.effect.id);
+  const people = session.people || 1;
+  const effects = Array.from({ length: people }, () => createEffect(state.styleId));
+  const minVis = minVisibilityFor(session.engine);
   let t = 0, playing = false, raf = 0, last = 0;
 
   const frameAt = ms => {
@@ -729,8 +832,13 @@ function setupReplay(session, root, onTime) {
   const draw = (dt = 1 / 30) => {
     ctx.clearRect(0, 0, w, h);
     const i = frameAt(t);
-    const visible = i >= 0 && t - times[i] < 500;
-    effect.draw(ctx, visible ? lm : null, Math.max(0, i) * FRAME_SIZE, w, h, dt, { mirror: session.mirrored });
+    const hasFrame = i >= 0 && t - times[i] < 500;
+    for (let p = 0; p < people; p++) {
+      const offset = frameOffset(session, Math.max(0, i), p);
+      const visible = hasFrame && personPresent(lm, offset);
+      effects[p].draw(ctx, visible ? lm : null, offset, w, h, dt, { mirror: session.mirrored, minVis, person: p });
+      if (visible && people > 1) drawPersonBadge(ctx, lm, offset, w, h, p, { mirror: session.mirrored, minVis });
+    }
   };
   const setTime = (nt, dt) => {
     t = clamp(nt, 0, durationMs);
@@ -757,7 +865,7 @@ function setupReplay(session, root, onTime) {
       cancelAnimationFrame(raf);
     }
   };
-  range.oninput = () => { effect.reset(); setTime(Number(range.value)); };
+  range.oninput = () => { effects.forEach(e => e.reset()); setTime(Number(range.value)); };
   setTime(0);
   return { destroy() { playing = false; cancelAnimationFrame(raf); } };
 }
@@ -773,7 +881,7 @@ function renderSessions() {
     <div class="card session-item" data-id="${escapeHtml(m.id)}">
       <div class="grow">
         <h2>${escapeHtml(m.name)}</h2>
-        <div class="meta">${escapeHtml(fmtDate(m.createdAt))} · ${fmtDuration(m.durationMs)} · ${m.frameCount} frames · ${fmtBytes(m.bytes || 0)}</div>
+        <div class="meta">${escapeHtml(fmtDate(m.createdAt))} · ${fmtDuration(m.durationMs)} · ${m.frameCount} frames${m.model ? ` · ${describeSession(m)}` : ''} · ${fmtBytes(m.bytes || 0)}</div>
       </div>
       <div class="actions">
         <button class="btn btn-sm btn-primary" data-action="open">Open</button>
@@ -849,6 +957,34 @@ function init() {
     });
   });
 
+  // Detection settings
+  ui.selModel.replaceChildren(...ENGINES.map(e => {
+    const opt = document.createElement('option');
+    opt.value = e.id;
+    opt.textContent = e.label;
+    opt.title = e.help;
+    return opt;
+  }));
+  ui.selPeople.replaceChildren(...Array.from({ length: MAX_PEOPLE }, (_, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i + 1);
+    opt.textContent = i === 0 ? '1 person' : `${i + 1} people`;
+    return opt;
+  }));
+  const savedModel = localStorage.getItem(MODEL_KEY);
+  if (savedModel && ENGINES.some(e => e.id === savedModel)) ui.selModel.value = savedModel;
+  const savedPeople = Number(localStorage.getItem(PEOPLE_KEY));
+  if (savedPeople >= 1 && savedPeople <= MAX_PEOPLE) ui.selPeople.value = String(savedPeople);
+  syncSettingsUI();
+  ui.selModel.addEventListener('change', onSettingsChanged);
+  ui.selPeople.addEventListener('change', onSettingsChanged);
+  ui.btnHelp.addEventListener('click', () => {
+    ui.helpPanel.open = !ui.helpPanel.open;
+    ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open));
+    if (ui.helpPanel.open) ui.helpPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  ui.helpPanel.addEventListener('toggle', () => ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open)));
+
   ui.btnCamera.addEventListener('click', startCamera);
   ui.btnRecord.addEventListener('click', () => startRecording('button'));
   ui.btnStop.addEventListener('click', () => stopRecording());
@@ -864,7 +1000,7 @@ function init() {
   }));
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   ui.btnStyle.addEventListener('click', nextStyle);
-  setStyle(state.effect.id);
+  setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
   setVideo(state.showVideo);
   ui.btnFullscreen.addEventListener('click', toggleFullscreen);
@@ -873,12 +1009,6 @@ function init() {
     const fs = Boolean(document.fullscreenElement);
     ui.btnFullscreen.textContent = fs ? '✕' : '⛶';
     ui.btnFullscreen.title = fs ? 'Exit fullscreen (F)' : 'Fullscreen (F)';
-  });
-  ui.selModel.addEventListener('change', () => {
-    if (!state.stream) return;
-    ui.btnRecord.disabled = true;
-    ui.hudRecord.disabled = true;
-    ensureDetector().then(() => { ui.btnRecord.disabled = false; ui.hudRecord.disabled = false; }, err => toast(`Could not load model: ${err.message}`));
   });
   ui.selCamera.addEventListener('change', () => switchCamera(ui.selCamera.value));
   navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (state.stream) refreshCameraList(); });

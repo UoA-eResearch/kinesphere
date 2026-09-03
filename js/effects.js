@@ -5,6 +5,17 @@
 
 import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton } from './pose.js';
 
+/** Colour set per tracked person (slot). Person 1 keeps the classic orange/blue. */
+export const PERSON_COLORS = [
+  { left: '#eb6834', right: '#3987e5', mid: '#f4f4f2', body: '#ffffff', hue: 0 },
+  { left: '#f2c14e', right: '#9b6cf0', mid: '#fff6d8', body: '#fff0b8', hue: 55 },
+  { left: '#f06fb0', right: '#3ecf8e', mid: '#ffe3f0', body: '#ffd3e8', hue: 125 },
+  { left: '#ff9f43', right: '#00c2d1', mid: '#ffefdc', body: '#ffe2bf', hue: 190 },
+  { left: '#c0f050', right: '#5f7cff', mid: '#f1ffd8', body: '#e2ffb0', hue: 250 },
+  { left: '#ff6b6b', right: '#4dd0e1', mid: '#ffe0e0', body: '#ffc4c4', hue: 310 },
+];
+export const personColors = p => PERSON_COLORS[(p ?? 0) % PERSON_COLORS.length];
+
 export const STYLES = [
   { id: 'skeleton', label: 'Skeleton' },
   { id: 'stickman', label: 'Stick figure' },
@@ -77,9 +88,13 @@ function neckAndHead(p, minVis) {
 
 function skeletonStyle() {
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       if (!lm) return;
-      drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(2, w / 320), radius: Math.max(3, w / 240) });
+      const pc = personColors(person);
+      drawSkeleton(ctx, lm, offset, w, h, {
+        mirror, minVis, lineWidth: Math.max(2, w / 320), radius: Math.max(3, w / 240),
+        leftColor: pc.left, rightColor: pc.right, midColor: pc.mid,
+      });
     },
     reset() {},
   };
@@ -87,16 +102,17 @@ function skeletonStyle() {
 
 function stickmanStyle() {
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       if (!lm) return;
       const p = project(lm, offset, w, h, mirror);
       const head = neckAndHead(p, minVis);
       const thick = Math.max(6, w / 45);
+      const body = personColors(person).body;
       const bones = BODY_BONES.filter(([a, b]) => a < 29 && b < 29).concat([[27, 31], [28, 32]]);
       ctx.save();
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      for (const [color, width] of [['#111', thick + 6], ['#fff', thick]]) {
+      for (const [color, width] of [['#111', thick + 6], [body, thick]]) {
         drawBones(ctx, p, minVis, bones, () => color, width);
         if (head) {
           ctx.strokeStyle = color;
@@ -135,11 +151,11 @@ function stickmanStyle() {
 function neonStyle() {
   let t = 0;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       t += dt;
       if (!lm) return;
       const p = project(lm, offset, w, h, mirror);
-      const hue = (t * 40) % 360;
+      const hue = (t * 40 + personColors(person).hue) % 360;
       const colorFor = (a, b) => {
         const side = isLeft(a) && isLeft(b) ? 1 : !isLeft(a) && !isLeft(b) && a >= 11 && b >= 11 ? -1 : 0;
         return hsla(hue + side * 70, 100, 60);
@@ -180,8 +196,9 @@ function trailsStyle() {
   const trails = new Map(JOINTS.map(j => [j, []]));
   let clock = 0;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       clock += dt * 1000;
+      const shift = personColors(person).hue;
       const p = lm ? project(lm, offset, w, h, mirror) : null;
       for (const j of JOINTS) {
         const tr = trails.get(j);
@@ -191,7 +208,7 @@ function trailsStyle() {
       ctx.save();
       if (p) {
         ctx.globalAlpha = 0.35;
-        drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff' });
+        drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff', leftColor: personColors(person).left, rightColor: personColors(person).right });
         ctx.globalAlpha = 1;
       }
       ctx.globalCompositeOperation = 'lighter';
@@ -200,7 +217,7 @@ function trailsStyle() {
       const maxW = Math.max(6, w / 60);
       for (const j of JOINTS) {
         const tr = trails.get(j);
-        const hue = j === 0 ? 55 : isLeft(j) ? 25 : 200;
+        const hue = (j === 0 ? 55 : isLeft(j) ? 25 : 200) + shift;
         for (let i = 1; i < tr.length; i++) {
           const age = (clock - tr[i].t) / TRAIL_MS; // 0 new .. 1 old
           const speed = Math.hypot(tr[i].x - tr[i - 1].x, tr[i].y - tr[i - 1].y) / Math.max(1, tr[i].t - tr[i - 1].t);
@@ -224,8 +241,9 @@ function sparksStyle() {
   const particles = [];
   const tracker = makeTracker();
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       const g = h * 0.9; // gravity, px/s^2
+      const pc = personColors(person);
       const p = lm ? project(lm, offset, w, h, mirror) : null;
       if (p) {
         tracker.update(p, dt);
@@ -233,7 +251,7 @@ function sparksStyle() {
           if (p.v[j] < minVis) continue;
           const speed = Math.hypot(tracker.vx[j], tracker.vy[j]);
           const n = Math.min(14, Math.floor(speed / (h * 0.9) * 10 * Math.min(1, dt * 30)) + (Math.random() < dt * 4 ? 1 : 0));
-          const hue = j === 0 ? 50 : isLeft(j) ? rand(10, 45) : rand(190, 230);
+          const hue = (j === 0 ? 50 : isLeft(j) ? rand(10, 45) : rand(190, 230)) + pc.hue;
           for (let k = 0; k < n && particles.length < MAX; k++) {
             const a = rand(0, Math.PI * 2), s = rand(0, h * 0.15);
             particles.push({
@@ -247,7 +265,7 @@ function sparksStyle() {
       ctx.save();
       if (p) {
         ctx.globalAlpha = 0.3;
-        drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff' });
+        drawSkeleton(ctx, lm, offset, w, h, { mirror, minVis, lineWidth: Math.max(1.5, w / 500), radius: Math.max(2, w / 400), midColor: '#fff', leftColor: pc.left, rightColor: pc.right });
         ctx.globalAlpha = 1;
       }
       ctx.globalCompositeOperation = 'lighter';
@@ -275,14 +293,16 @@ function constellationStyle() {
   let t = 0;
   let stars = null;
   return {
-    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5 } = {}) {
+    draw(ctx, lm, offset, w, h, dt, { mirror = false, minVis = 0.5, person = 0 } = {}) {
       t += dt;
+      const shift = personColors(person).hue;
       if (!stars || stars.w !== w || stars.h !== h) {
         stars = { w, h, list: Array.from({ length: 90 }, () => ({ x: Math.random() * w, y: Math.random() * h, s: rand(0.6, 1.8), ph: rand(0, 6.3), sp: rand(2, 8) })) };
       }
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      for (const s of stars.list) {
+      // only the first person's effect draws the shared starfield, so it is not stacked N times
+      for (const s of person === 0 ? stars.list : []) {
         s.x = (s.x + s.sp * dt + w) % w;
         ctx.fillStyle = hsla(210, 60, 90, 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.7 + s.ph)));
         ctx.beginPath();
@@ -299,7 +319,7 @@ function constellationStyle() {
             if (p.v[a] < minVis || p.v[b] < minVis) continue;
             const d = Math.hypot(p.x[a] - p.x[b], p.y[a] - p.y[b]);
             if (d > reach) continue;
-            ctx.strokeStyle = hsla(200, 80, 85, 0.75 * (1 - d / reach) + 0.05);
+            ctx.strokeStyle = hsla(200 + shift, 80, 85, 0.75 * (1 - d / reach) + 0.05);
             ctx.lineWidth = 1.2;
             ctx.beginPath();
             ctx.moveTo(p.x[a], p.y[a]);
@@ -309,7 +329,7 @@ function constellationStyle() {
         }
         for (const [a, b] of BODY_BONES) {
           if (p.v[a] < minVis || p.v[b] < minVis) continue;
-          ctx.strokeStyle = hsla(200, 90, 80, 0.9);
+          ctx.strokeStyle = hsla(200 + shift, 90, 80, 0.9);
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.moveTo(p.x[a], p.y[a]);
@@ -321,14 +341,14 @@ function constellationStyle() {
           const tw = 0.7 + 0.3 * Math.sin(t * 3 + k * 1.3);
           const r = Math.max(3, w / 220) * tw;
           const grad = ctx.createRadialGradient(p.x[i], p.y[i], 0, p.x[i], p.y[i], r * 4);
-          grad.addColorStop(0, hsla(50, 100, 95, 0.9));
-          grad.addColorStop(0.3, hsla(45, 100, 75, 0.5));
-          grad.addColorStop(1, hsla(45, 100, 70, 0));
+          grad.addColorStop(0, hsla(50 + shift, 100, 95, 0.9));
+          grad.addColorStop(0.3, hsla(45 + shift, 100, 75, 0.5));
+          grad.addColorStop(1, hsla(45 + shift, 100, 70, 0));
           ctx.fillStyle = grad;
           ctx.beginPath();
           ctx.arc(p.x[i], p.y[i], r * 4, 0, Math.PI * 2);
           ctx.fill();
-          ctx.strokeStyle = hsla(50, 100, 95, 0.9 * tw);
+          ctx.strokeStyle = hsla(50 + shift, 100, 95, 0.9 * tw);
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(p.x[i] - r * 3, p.y[i]); ctx.lineTo(p.x[i] + r * 3, p.y[i]);
@@ -340,6 +360,38 @@ function constellationStyle() {
     },
     reset() { stars = null; },
   };
+}
+
+/**
+ * Numbered badge above a person's head, used when several people are tracked.
+ * `mirrorText` un-flips the digits when the canvas itself is CSS-mirrored.
+ */
+export function drawPersonBadge(ctx, lm, offset, w, h, person, { mirror = false, mirrorText = false, minVis = 0.3 } = {}) {
+  const p = project(lm, offset, w, h, mirror);
+  let idx = 0;
+  if (p.v[0] < minVis) {
+    idx = p.v[11] >= minVis ? 11 : p.v[12] >= minVis ? 12 : -1;
+    if (idx < 0) return;
+  }
+  const r = Math.max(10, w / 90);
+  const x = p.x[idx], y = p.y[idx] - (idx === 0 ? r * 3.2 : r * 2.2);
+  const pc = personColors(person);
+  ctx.save();
+  ctx.translate(x, y);
+  if (mirrorText) ctx.scale(-1, 1);
+  ctx.fillStyle = pc.left;
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#111';
+  ctx.font = `bold ${Math.round(r * 1.25)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(person + 1), 0, 1);
+  ctx.restore();
 }
 
 const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle };
