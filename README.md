@@ -147,6 +147,7 @@ css/style.css     styles, light and dark themes
 js/app.js         UI state: camera, recording, gesture control, dashboard, session library
 js/pose.js        detection engines (MediaPipe, MoveNet), person tracker, skeleton drawing
 js/effects.js     overlay styles (skeleton, stick figure, neon, trails, sparks, constellation)
+js/smoothing.js   One Euro display smoothing for the overlay and replay
 js/analysis.js    metrics (kinesphere, activity by region, speed, space, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, localStorage, JSON/CSV export

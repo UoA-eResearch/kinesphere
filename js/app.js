@@ -10,6 +10,7 @@ import { analyze, KINESPHERE_CLASSES, GRID_ROWS, GRID_COLS, MAJOR_NAMES } from '
 import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
+import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -24,6 +25,7 @@ const CAMERA_KEY = 'kinesphere:camera';
 const STYLE_KEY = 'kinesphere:style';
 const MODEL_KEY = 'kinesphere:model';
 const PEOPLE_KEY = 'kinesphere:people';
+const SMOOTH_KEY = 'kinesphere:smoothing';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -44,7 +46,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
-  btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'),
+  btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -59,6 +61,7 @@ const state = {
   showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
   showVideo: localStorage.getItem(VIDEO_KEY) !== 'off',
   styleId: localStorage.getItem(STYLE_KEY) || DEFAULT_STYLE,
+  smoother: createSmoother(localStorage.getItem(SMOOTH_KEY) || DEFAULT_SMOOTHING, MAX_PEOPLE),
   lastPeople: null, lastPeopleAt: 0, lastRender: 0,
   current: null,        // { session, analyses, person, saved, saveError }
   charts: [], replay: null,
@@ -313,6 +316,13 @@ function setOverlay(on) {
   if (!on) overlayCtx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
 }
 
+function setSmoothing(id) {
+  state.smoother = createSmoother(id, MAX_PEOPLE);
+  localStorage.setItem(SMOOTH_KEY, state.smoother.id);
+  ui.selSmooth.value = state.smoother.id;
+  ui.selSmooth.title = `${SMOOTHING_LEVELS.find(l => l.id === state.smoother.id)?.help ?? ''} Display only: recordings keep the raw landmarks.`;
+}
+
 function rebuildEffects() {
   const n = state.detector?.people ?? 1;
   state.effects = Array.from({ length: n }, () => createEffect(state.styleId));
@@ -417,8 +427,13 @@ function renderOverlay(now) {
   const { width, height } = ui.canvas;
   overlayCtx.clearRect(0, 0, width, height);
   if (!state.showOverlay || !state.detector) return;
-  const slots = state.lastPeople && now - state.lastPeopleAt < 600 ? state.lastPeople : null;
+  const raw = state.lastPeople && now - state.lastPeopleAt < 600 ? state.lastPeople : null;
   const minVis = minVisibilityFor(state.detector.engine);
+  const slots = raw ? raw.map((lm, p) => {
+    if (!lm) { state.smoother.reset(p); return null; }
+    return state.smoother.apply(lm, 0, p, dt);
+  }) : null;
+  if (!slots) state.smoother.reset();
   state.effects.forEach((effect, p) => effect.draw(overlayCtx, slots?.[p] ?? null, 0, width, height, dt, { person: p, minVis }));
   if (slots && state.detector.people > 1) {
     slots.forEach((lm, p) => { if (lm) drawPersonBadge(overlayCtx, lm, 0, width, height, p, { mirrorText: state.mirrored, minVis }); });
@@ -816,6 +831,7 @@ function setupReplay(session, root, onTime) {
   const { times, lm, durationMs } = session;
   const people = session.people || 1;
   const effects = Array.from({ length: people }, () => createEffect(state.styleId));
+  const smoother = createSmoother(state.smoother.id, people);
   const minVis = minVisibilityFor(session.engine);
   let t = 0, playing = false, raf = 0, last = 0;
 
@@ -836,8 +852,10 @@ function setupReplay(session, root, onTime) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      effects[p].draw(ctx, visible ? lm : null, offset, w, h, dt, { mirror: session.mirrored, minVis, person: p });
-      if (visible && people > 1) drawPersonBadge(ctx, lm, offset, w, h, p, { mirror: session.mirrored, minVis });
+      if (!visible) { smoother.reset(p); effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
+      const shown = smoother.apply(lm, offset, p, dt);
+      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p });
+      if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: session.mirrored, minVis });
     }
   };
   const setTime = (nt, dt) => {
@@ -865,7 +883,7 @@ function setupReplay(session, root, onTime) {
       cancelAnimationFrame(raf);
     }
   };
-  range.oninput = () => { effects.forEach(e => e.reset()); setTime(Number(range.value)); };
+  range.oninput = () => { effects.forEach(e => e.reset()); smoother.reset(); setTime(Number(range.value)); };
   setTime(0);
   return { destroy() { playing = false; cancelAnimationFrame(raf); } };
 }
@@ -1003,6 +1021,15 @@ function init() {
   setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
   setVideo(state.showVideo);
+  ui.selSmooth.replaceChildren(...SMOOTHING_LEVELS.map(l => {
+    const opt = document.createElement('option');
+    opt.value = l.id;
+    opt.textContent = l.label;
+    opt.title = l.help;
+    return opt;
+  }));
+  ui.selSmooth.addEventListener('change', () => setSmoothing(ui.selSmooth.value));
+  setSmoothing(state.smoother.id);
   ui.btnFullscreen.addEventListener('click', toggleFullscreen);
   if (!document.fullscreenEnabled && !ui.stage.requestFullscreen) ui.btnFullscreen.hidden = true;
   document.addEventListener('fullscreenchange', () => {
