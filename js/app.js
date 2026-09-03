@@ -42,6 +42,7 @@ const ui = {
   status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
+  load: $('#load'), loadFill: $('#load-fill'), loadLabel: $('#load-label'),
   views: { live: $('#view-live'), dashboard: $('#view-dashboard'), sessions: $('#view-sessions') },
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
@@ -82,6 +83,22 @@ function setStatus(msg) {
   if (msg === state.lastStatus) return;
   state.lastStatus = msg;
   ui.status.textContent = msg;
+}
+
+/** Progress bar under the status while model files download; `progress` is { loaded, total } or null. */
+function showLoadProgress(progress) {
+  if (!progress || !(progress.total > 0)) { ui.load.hidden = true; return; }
+  const frac = clamp(progress.loaded / progress.total, 0, 1);
+  const mb = b => (b / 1e6).toFixed(1);
+  ui.load.hidden = false;
+  ui.loadFill.style.width = `${(frac * 100).toFixed(1)}%`;
+  ui.loadLabel.textContent = `${mb(progress.loaded)} / ${mb(progress.total)} MB`;
+  ui.load.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+}
+
+function onLoadStatus(msg, progress = null) {
+  setStatus(msg);
+  showLoadProgress(progress);
 }
 
 function setView(name) {
@@ -368,8 +385,9 @@ function ensureDetector() {
   const old = state.detector;
   state.detector = null;
   state.lastPeople = null;
-  state.detectorPromise = createPoseDetector({ model, people, onStatus: setStatus }).then(
+  state.detectorPromise = createPoseDetector({ model, people, onStatus: onLoadStatus }).then(
     d => {
+      showLoadProgress(null);
       state.detector = d;
       state.detectorPromise = null;
       state.tracker = createTracker(d.people);
@@ -380,7 +398,7 @@ function ensureDetector() {
       if (now.model !== d.model || now.people !== d.people) return ensureDetector();
       return d;
     },
-    err => { state.detectorPromise = null; if (old) state.detector = old; throw err; },
+    err => { showLoadProgress(null); state.detectorPromise = null; if (old) state.detector = old; throw err; },
   );
   return state.detectorPromise;
 }

@@ -15,8 +15,9 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
 
 ## Using the app
 
-1. **Start camera.** Allow camera access. The lite pose model (about 6 MB) is downloaded on first
-   use, then your webcam is shown mirrored with the detected skeleton drawn on top
+1. **Start camera.** Allow camera access. The pose runtime and model (about 18 MB for MediaPipe
+   Lite) are downloaded on first use with a progress bar in the preview, and come from the browser
+   cache afterwards. Then your webcam is shown mirrored with the detected skeleton drawn on top
    (left side orange, right side blue). Stand back so your whole body is in the frame.
    The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>), hide the camera
    feed so only the overlay is shown on black (<kbd>V</kbd>), and make the camera view fullscreen

@@ -46,6 +46,7 @@
             </div>
             <div class="hud-center"><div id="countdown" class="countdown" hidden></div></div>
             <div class="hud-bottom">
+              <div id="load" class="hold load" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="hold-bar"><div id="load-fill" class="hold-fill"></div></div><span id="load-label" class="mono"></span></div>
               <div id="hold" class="hold" hidden><div class="hold-bar"><div id="hold-fill" class="hold-fill"></div></div><span id="hold-label"></span></div>
               <div id="status" class="status">Camera off</div>
             </div>
@@ -92,7 +93,7 @@
           <dt>People</dt>
           <dd>How many dancers to track at the same time (up to six). Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
           <dt>What does not change</dt>
-          <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, speed and space are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB).</dd>
+          <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, speed and space are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB, with a progress bar in the preview; later uses come from the browser cache).</dd>
         </dl>
       </details>
       <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay, <kbd>V</kbd> to show or hide the camera feed, <kbd>S</kbd> for the next overlay style.</p>

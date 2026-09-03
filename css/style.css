@@ -181,6 +181,9 @@ select, input[type="text"] {
 .hold { display: flex; align-items: center; gap: 0.75rem; }
 .hold-bar { flex: 1; max-width: 320px; height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.3); overflow: hidden; }
 .hold-fill { height: 100%; width: 0; background: #fff; transition: width 0.08s linear; }
+.load .hold-fill { background: var(--accent); }
+.load .hold-bar { background: rgba(255, 255, 255, 0.25); }
+.load span { font-size: 0.85rem; }
 .stage-placeholder {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem;
   background: linear-gradient(160deg, #1d2430, #0f1218); color: #dfe3ea; text-align: center; padding: 2rem;

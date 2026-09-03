@@ -18,6 +18,58 @@ export const MODELS = {
   full: `${MP_MODEL_BASE}/pose_landmarker_full/float16/1/pose_landmarker_full.task`,
   heavy: `${MP_MODEL_BASE}/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task`,
 };
+/** Approximate download sizes (bytes), used for the progress bar before Content-Length is known. */
+const MODEL_BYTES = { lite: 5.8e6, full: 9.4e6, heavy: 30.7e6, 'movenet-lightning': 4.7e6, 'movenet-thunder': 12.5e6, 'movenet-multipose': 9.4e6 };
+const MP_WASM_BYTES = 11.8e6;
+
+/**
+ * Fetch a URL as bytes while reporting progress. `onProgress(loaded, total)` is called as chunks
+ * arrive; `total` comes from Content-Length, or the expected size until the real size is known.
+ */
+export async function fetchWithProgress(url, onProgress, expectedBytes = 0) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
+  const declared = Number(res.headers.get('content-length')) || 0;
+  let total = declared || expectedBytes || 0;
+  if (!res.body?.getReader) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    onProgress?.(buf.length, buf.length);
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    if (loaded > total) total = loaded;
+    onProgress?.(loaded, total);
+  }
+  const out = new Uint8Array(loaded);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  onProgress?.(loaded, loaded);
+  return out;
+}
+
+/** Sums progress over several downloads and reports it through onStatus(message, { loaded, total }). */
+function progressTracker(onStatus) {
+  const files = new Map();
+  let message = '';
+  const report = () => {
+    let loaded = 0, total = 0;
+    for (const f of files.values()) { loaded += f.loaded; total += f.total; }
+    onStatus(message, total ? { loaded, total } : null);
+  };
+  return {
+    say(msg) { message = msg; report(); },
+    expect(key, bytes) { files.set(key, { loaded: 0, total: bytes }); },
+    fetcher(key) { return (loaded, total) => { files.set(key, { loaded, total }); report(); }; },
+    done() { onStatus(message, null); },
+  };
+}
 
 /** The 33 BlazePose landmarks, in MediaPipe index order. */
 export const LANDMARK_NAMES = [
@@ -98,11 +150,27 @@ function loadMediaPipe() {
 }
 
 async function createMediaPipe(info, people, onStatus) {
-  onStatus('Loading MediaPipe…');
+  const progress = progressTracker(onStatus);
+  progress.say('Loading MediaPipe…');
   const { PoseLandmarker, FilesetResolver } = await loadMediaPipe();
-  const vision = await FilesetResolver.forVisionTasks(`${MP_CDN}/wasm`);
+  // Fetch the WebAssembly runtime and the model ourselves so the download can show progress;
+  // the runtime is handed over as a blob URL and the model as a buffer.
+  const simd = await FilesetResolver.isSimdSupported?.().catch(() => true) ?? true;
+  const wasmName = simd ? 'vision_wasm_internal' : 'vision_wasm_nosimd_internal';
+  const modelUrl = MODELS[info.variant] ?? MODELS.lite;
+  progress.expect('wasm', MP_WASM_BYTES);
+  progress.expect('model', MODEL_BYTES[info.id] ?? 6e6);
+  progress.say(`Downloading the MediaPipe runtime and the ${info.label} model…`);
+  const [wasmBytes, modelBytes] = await Promise.all([
+    fetchWithProgress(`${MP_CDN}/wasm/${wasmName}.wasm`, progress.fetcher('wasm'), MP_WASM_BYTES),
+    fetchWithProgress(modelUrl, progress.fetcher('model'), MODEL_BYTES[info.id] ?? 6e6),
+  ]);
+  const wasmBlobUrl = URL.createObjectURL(new Blob([wasmBytes], { type: 'application/wasm' }));
+  const fileset = { wasmLoaderPath: `${MP_CDN}/wasm/${wasmName}.js`, wasmBinaryPath: wasmBlobUrl };
+  progress.done();
+  onStatus(`Starting ${info.label}…`, null);
   const options = {
-    baseOptions: { modelAssetPath: MODELS[info.variant] ?? MODELS.lite, delegate: 'GPU' },
+    baseOptions: { modelAssetBuffer: modelBytes, delegate: 'GPU' },
     runningMode: 'VIDEO',
     numPoses: people,
     minPoseDetectionConfidence: 0.5,
@@ -110,16 +178,17 @@ async function createMediaPipe(info, people, onStatus) {
     minTrackingConfidence: 0.5,
     outputSegmentationMasks: false,
   };
-  onStatus(`Downloading the ${info.label} model…`);
   let landmarker;
   let delegate = 'GPU';
   try {
-    landmarker = await PoseLandmarker.createFromOptions(vision, options);
+    landmarker = await PoseLandmarker.createFromOptions(fileset, options);
   } catch (err) {
     console.warn('GPU delegate unavailable, falling back to CPU', err);
     delegate = 'CPU';
-    options.baseOptions.delegate = 'CPU';
-    landmarker = await PoseLandmarker.createFromOptions(vision, options);
+    options.baseOptions = { modelAssetBuffer: modelBytes.slice(), delegate: 'CPU' };
+    landmarker = await PoseLandmarker.createFromOptions(fileset, options);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(wasmBlobUrl), 60000);
   }
   return {
     delegate,
@@ -147,7 +216,7 @@ function loadScript(src) {
 let tfPromise = null;
 function loadTensorFlow(onStatus) {
   tfPromise ??= (async () => {
-    onStatus('Loading TensorFlow.js…');
+    onStatus('Loading TensorFlow.js…', null);
     for (const pkg of ['tfjs-core/dist/tf-core.min.js', 'tfjs-converter/dist/tf-converter.min.js', 'tfjs-backend-webgl/dist/tf-backend-webgl.min.js', 'tfjs-backend-cpu/dist/tf-backend-cpu.min.js']) {
       const [name, file] = pkg.split('/dist/');
       await loadScript(`${TF_CDN}/@tensorflow/${name}@${TF_VERSION}/dist/${file}`);
@@ -158,7 +227,7 @@ function loadTensorFlow(onStatus) {
     let ok = false;
     try { ok = await tf.setBackend('webgl'); } catch (err) { console.warn('WebGL backend unavailable', err); }
     if (!ok) {
-      onStatus('No GPU available for TensorFlow.js, using the (slow) CPU backend…');
+      onStatus('No GPU available for TensorFlow.js, using the (slow) CPU backend…', null);
       await tf.setBackend('cpu');
     }
     await tf.ready();
@@ -168,16 +237,41 @@ function loadTensorFlow(onStatus) {
   return tfPromise;
 }
 
+const MOVENET_URLS = {
+  'SinglePose.Lightning': 'https://tfhub.dev/google/tfjs-model/movenet/singlepose/lightning/4',
+  'SinglePose.Thunder': 'https://tfhub.dev/google/tfjs-model/movenet/singlepose/thunder/4',
+  'MultiPose.Lightning': 'https://tfhub.dev/google/tfjs-model/movenet/multipose/lightning/1',
+};
+
 async function createMoveNet(info, people, onStatus) {
   const pd = await loadTensorFlow(onStatus);
-  onStatus(`Downloading the ${info.label} model…`);
+  const progress = progressTracker(onStatus);
+  progress.expect('model', MODEL_BYTES[info.id] ?? 6e6);
+  progress.say(`Downloading the ${info.label} model…`);
   const multi = info.variant === 'MultiPose.Lightning';
   const modelType = multi ? pd.movenet.modelType.MULTIPOSE_LIGHTNING
     : info.variant === 'SinglePose.Thunder' ? pd.movenet.modelType.SINGLEPOSE_THUNDER
       : pd.movenet.modelType.SINGLEPOSE_LIGHTNING;
-  const config = { modelType, enableSmoothing: true };
+  // A fetch that streams each file (model.json + weight shards) and adds it to the progress bar.
+  const perFile = new Map();
+  let expected = MODEL_BYTES[info.id] ?? 6e6;
+  const fetchFunc = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const bytes = await fetchWithProgress(url, (loaded, total) => {
+      perFile.set(url, { loaded, total });
+      let l = 0, t = 0;
+      for (const f of perFile.values()) { l += f.loaded; t += f.total; }
+      progress.fetcher('model')(l, Math.max(t, expected, l));
+    });
+    const type = /\.json(\?|$)/.test(url) ? 'application/json' : 'application/octet-stream';
+    return new Response(bytes, { status: 200, statusText: 'OK', headers: { 'content-type': type } });
+  };
+  // TF Hub's "?tfjs-format=file" suffix is copied onto the weight shard URLs by the http handler.
+  const modelUrl = window.tf.io.http(`${MOVENET_URLS[info.variant]}/model.json?tfjs-format=file`, { fetchFunc });
+  const config = { modelType, modelUrl, enableSmoothing: true };
   if (multi) { config.enableTracking = true; config.trackerType = pd.TrackerType.BoundingBox; }
   const detector = await pd.createDetector(pd.SupportedModels.MoveNet, config);
+  progress.done();
   return {
     delegate: window.tf.getBackend(),
     async detect(video, timestampMs) {
@@ -211,7 +305,9 @@ async function createMoveNet(info, people, onStatus) {
  * Create a detector. `detect(video, timestampMs)` returns (possibly a promise of) an array of
  * poses `{ lm: Float32Array(132), id? }` in no particular order; use a tracker to keep people
  * in stable slots.
- * @param {{model?: string, people?: number, onStatus?: (msg: string) => void}} opts
+ * `onStatus(message, progress)` receives a human-readable status and, while files download,
+ * `{ loaded, total }` in bytes (null otherwise).
+ * @param {{model?: string, people?: number, onStatus?: (msg: string, progress: {loaded: number, total: number}|null) => void}} opts
  */
 export async function createPoseDetector({ model = 'lite', people = 1, onStatus = () => {} } = {}) {
   const info = engineInfo(model);
