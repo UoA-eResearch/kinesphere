@@ -7,6 +7,14 @@
   <meta name="description" content="Record a dance session with your webcam and MediaPipe Pose, then explore where and how much you moved. Everything stays in your browser.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232a78d6'/%3E%3Ccircle cx='16' cy='9' r='3' fill='white'/%3E%3Cpath d='M16 12v8M9 14l7-2 7 2M11 26l5-6 5 6' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -61,6 +69,13 @@
         </div>
       </div>
 
+      <div class="viewer3d-bar" id="live-3d-bar" hidden>
+        <button id="btn-live-3d" class="btn btn-sm" aria-pressed="false" title="Show the tracked pose as a 3D figure you can orbit">3D view</button>
+        <button id="btn-live-vr" class="btn btn-sm" hidden>Enter VR</button>
+        <button id="btn-live-ar" class="btn btn-sm" hidden>Enter AR</button>
+        <span id="live-vr-note" class="meta"></span>
+      </div>
+      <div id="live-3d" class="viewer3d" hidden></div>
       <div class="controls">
         <button id="btn-record" class="btn btn-primary" disabled>● Record</button>
         <button id="btn-stop" class="btn btn-danger" hidden>■ Stop</button>
@@ -94,6 +109,8 @@
           <dd>Google's TensorFlow.js model. Tracks only 17 joints (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles) and no depth, so the overlay is simpler and the stick figure has no hands or feet. It is often faster than MediaPipe on phones and laptops without a usable GPU. Lightning and Thunder are single-person models; MultiPose tracks up to six people and has a built-in tracker that keeps identities stable.</dd>
           <dt>People</dt>
           <dd>How many dancers to track at the same time (up to six). Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
+          <dt>3D view and VR</dt>
+          <dd>The <em>3D view</em> button (live, and in the replay) shows the tracked skeleton as a life-size figure you can orbit with the mouse or a finger. Depth comes from MediaPipe's per-joint z estimate, so MoveNet sessions appear flat. On a WebXR-capable browser with a headset connected (Meta Quest Browser, or Chrome/Edge with a PC headset) <em>Enter VR</em> puts the figure on the floor in front of you at life size, and <em>Enter AR</em> does the same over passthrough where supported; a controller trigger toggles play/pause in the replay. VR is optional and the buttons only appear when the browser reports headset support.</dd>
           <dt>What does not change</dt>
           <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, speed and space are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB, with a progress bar in the preview; later uses come from the cache below).</dd>
         </dl>

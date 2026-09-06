@@ -62,6 +62,19 @@ the overlay simpler (no hands, feet or face detail). Tracking more people lowers
 pose control fires when *anyone* raises both hands. The GPU delegate (MediaPipe) or WebGL backend
 (MoveNet) is used when available. The theme button in the header cycles between system / light / dark.
 
+### 3D view and VR (optional)
+
+Both the live view and the replay have a **3D view** button that shows the tracked skeleton as a
+life-size figure on a floor grid, which you can orbit with the mouse or a finger. Depth comes from
+MediaPipe's per-joint z estimate (so MoveNet sessions appear flat), and the figure is scaled so a
+torso is about 0.5 m with the feet on the floor.
+
+On a WebXR-capable browser with a headset (Meta Quest Browser, or Chrome/Edge with a PC headset)
+**Enter VR** places the figure about 1.8 m in front of you at life size; **Enter AR** does the same
+over passthrough where the browser supports `immersive-ar`. A controller trigger toggles play/pause
+in the replay. The buttons only appear when the browser reports headset support; everything else
+in the app works without VR. three.js is loaded from the CDN the first time a 3D view is opened.
+
 ## The dashboard
 
 All distances are divided by the dancer's torso length (median distance from mid-shoulders to
@@ -160,6 +173,7 @@ js/app.js         UI state: camera, recording, gesture control, dashboard, sessi
 js/pose.js        detection engines (MediaPipe, MoveNet), person tracker, skeleton drawing
 js/effects.js     overlay styles (skeleton, stick figure, neon, trails, sparks, constellation)
 js/smoothing.js   One Euro display smoothing for the overlay and replay
+js/viewer3d.js    three.js 3D figure viewer with WebXR (VR / AR) sessions
 js/analysis.js    metrics (kinesphere, activity by region, speed, space, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, localStorage, JSON/CSV export
@@ -167,8 +181,9 @@ js/util.js        formatting and statistics helpers
 ```
 
 Dependencies are loaded from the CDN at runtime: `@mediapipe/tasks-vision` 1.0.1 with the official
-pose landmarker models, and, only when a MoveNet model is selected, `@tensorflow/tfjs` 4.22 with
-`@tensorflow-models/pose-detection` 2.1.3 and the MoveNet weights from TF Hub / Kaggle.
+pose landmarker models; only when a MoveNet model is selected, `@tensorflow/tfjs` 4.22 with
+`@tensorflow-models/pose-detection` 2.1.3 and the MoveNet weights from TF Hub / Kaggle; and only
+when a 3D view is opened, `three` 0.170 (via the import map in `index.html`).
 
 ### Hosting on GitHub Pages
 

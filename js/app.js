@@ -12,6 +12,7 @@ import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable,
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
+import { createViewer3D, xrSupport, estimateBodyScale, loadThree } from './viewer3d.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -50,6 +51,7 @@ const ui = {
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
+  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -69,6 +71,8 @@ const state = {
   lastPeople: null, lastPeopleAt: 0, lastRender: 0,
   current: null,        // { session, analyses, person, saved, saveError }
   charts: [], replay: null,
+  liveViewer: null, liveViewerPromise: null, liveBody: { torso: 0, floor: 0 },
+  xr: { vr: false, ar: false, checked: false },
 };
 
 // ---------------------------------------------------------------------------------------
@@ -329,6 +333,8 @@ async function startCamera() {
   }
   ui.btnRecord.disabled = false;
   ui.hudRecord.disabled = false;
+  ui.live3dBar.hidden = false;
+  wireXrButtons(ui.btnLiveVr, ui.btnLiveAr, ui.liveVrNote, ensureLiveViewer);
   startLoop();
 }
 
@@ -385,6 +391,74 @@ function toggleFullscreen() {
     toast('Fullscreen is not supported in this browser.');
   }
 }
+
+// ---------------------------------------------------------------------------------------
+// 3D view and WebXR
+
+/** Show Enter VR / AR buttons when the browser offers immersive sessions, else a short note. */
+async function wireXrButtons(btnVr, btnAr, note, getViewer) {
+  if (!state.xr.checked) { state.xr = { ...(await xrSupport()), checked: true }; }
+  btnVr.hidden = !state.xr.vr;
+  btnAr.hidden = !state.xr.ar;
+  if (!state.xr.vr && !state.xr.ar) {
+    note.textContent = 'No VR headset detected: open this page in a WebXR browser (for example Meta Quest Browser) for Enter VR. The 3D view works everywhere.';
+  } else {
+    note.textContent = 'In VR the figure stands life-size in front of you; a controller trigger toggles play/pause.';
+    loadThree().catch(() => {}); // warm up so Enter VR can start within the click's user activation
+  }
+  const enter = mode => async () => {
+    try {
+      const viewer = await getViewer();
+      await viewer.enterXR(mode);
+    } catch (err) {
+      console.warn(err);
+      toast(`Could not start ${mode === 'immersive-ar' ? 'AR' : 'VR'}: ${err.message || err.name}`, 6000);
+    }
+  };
+  btnVr.onclick = enter('immersive-vr');
+  btnAr.onclick = enter('immersive-ar');
+}
+
+function ensureLiveViewer() {
+  if (state.liveViewer) return Promise.resolve(state.liveViewer);
+  if (state.liveViewerPromise) return state.liveViewerPromise;
+  ui.live3d.hidden = false;
+  ui.btnLive3d.setAttribute('aria-pressed', 'true');
+  const aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
+  state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: state.mirrored }).then(
+    v => { state.liveViewer = v; state.liveViewerPromise = null; return v; },
+    err => { state.liveViewerPromise = null; ui.live3d.hidden = true; ui.btnLive3d.setAttribute('aria-pressed', 'false'); toast(`Could not load the 3D view: ${err.message}`, 6000); throw err; },
+  );
+  return state.liveViewerPromise;
+}
+
+function toggleLiveViewer() {
+  if (state.liveViewer) {
+    state.liveViewer.destroy();
+    state.liveViewer = null;
+    ui.live3d.hidden = true;
+    ui.btnLive3d.setAttribute('aria-pressed', 'false');
+    return;
+  }
+  ensureLiveViewer().catch(() => {});
+}
+
+/** Keep a running estimate of body scale and floor level for the live 3D figure. */
+function updateLiveBody(pose) {
+  if (!pose) return;
+  const lm = pose.lm, aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
+  const v = i => lm[i * STRIDE_LOCAL + 3];
+  if (v(11) < 0.5 || v(12) < 0.5 || v(23) < 0.5 || v(24) < 0.5) return;
+  const X = i => lm[i * STRIDE_LOCAL] * aspect, Y = i => lm[i * STRIDE_LOCAL + 1];
+  const torso = Math.hypot((X(11) + X(12)) / 2 - (X(23) + X(24)) / 2, (Y(11) + Y(12)) / 2 - (Y(23) + Y(24)) / 2);
+  const body = state.liveBody;
+  body.torso = body.torso ? body.torso * 0.9 + torso * 0.1 : torso;
+  const ankle = Math.max(v(27) >= 0.5 ? Y(27) : -1, v(28) >= 0.5 ? Y(28) : -1);
+  const floor = ankle >= 0 ? ankle + torso * 0.15 : (Y(23) + Y(24)) / 2 + torso * 2.3;
+  body.floor = body.floor ? Math.max(body.floor * 0.995, floor) : floor; // follow the lowest point seen, slowly forgetting
+  state.liveViewer?.setScale({ scale: 0.5 / body.torso, floorY: body.floor });
+}
+const STRIDE_LOCAL = 4;
 
 function resizeCanvas() {
   const w = ui.video.videoWidth, h = ui.video.videoHeight;
@@ -475,6 +549,7 @@ function renderOverlay(now) {
   }) : null;
   if (!slots) { state.smoother.reset(); state.handSmoother.reset(); }
   const faceContours = state.detector.faceContours;
+  if (state.liveViewer) state.liveViewer.setPeople(slots?.map(pose => pose && { lm: pose.lm, offset: 0 }) ?? null, minVis);
   state.effects.forEach((effect, p) => {
     const pose = slots?.[p] ?? null;
     effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours });
@@ -526,6 +601,7 @@ function onDetection(slots, now) {
 
   updateGesture(present, now);
   updateStatus(present.length);
+  if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
 }
 
 function updateGesture(present, now) {
@@ -715,6 +791,13 @@ function renderDashboard() {
         <input type="range" id="replay-range" min="0" max="${Math.max(1, session.durationMs)}" value="0" step="1" aria-label="Playback position">
         <span id="replay-time" class="mono">0:00 / ${fmtClock(session.durationMs)}</span>
       </div>
+      <div class="viewer3d-bar">
+        <button class="btn btn-sm" id="replay-3d-toggle" aria-pressed="false" title="Show the recording as a 3D figure you can orbit">3D view</button>
+        <button class="btn btn-sm" id="replay-vr" hidden>Enter VR</button>
+        <button class="btn btn-sm" id="replay-ar" hidden>Enter AR</button>
+        <span class="meta" id="replay-vr-note"></span>
+      </div>
+      <div id="replay-3d" class="viewer3d" hidden></div>
     </section>
     ${tabs}
     ${a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
@@ -745,7 +828,39 @@ function renderDashboard() {
 
   const onTime = t => { for (const c of state.charts) c.setCursor?.(t); };
   state.replay = setupReplay(session, root, onTime);
+  setupReplay3D(session, analyses, root, state.replay);
   if (a.ok) mountCharts(a, session, root);
+}
+
+function setupReplay3D(session, analyses, root, replay) {
+  const panel = root.querySelector('#replay-3d');
+  const toggle = root.querySelector('#replay-3d-toggle');
+  let viewer = null, viewerPromise = null;
+  const ensure = () => {
+    if (viewer) return Promise.resolve(viewer);
+    if (viewerPromise) return viewerPromise;
+    panel.hidden = false;
+    toggle.setAttribute('aria-pressed', 'true');
+    viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: session.mirrored }).then(
+      v => {
+        viewer = v; viewerPromise = null;
+        const slot = Math.max(0, analyses.findIndex(x => x.ok));
+        v.setScale(estimateBodyScale(session, slot));
+        v.onSelect(() => replay.togglePlay());
+        replay.attachViewer(v);
+        return v;
+      },
+      err => { viewerPromise = null; panel.hidden = true; toggle.setAttribute('aria-pressed', 'false'); toast(`Could not load the 3D view: ${err.message}`, 6000); throw err; },
+    );
+    return viewerPromise;
+  };
+  toggle.onclick = () => {
+    if (viewer) { replay.attachViewer(null); viewer.destroy(); viewer = null; panel.hidden = true; toggle.setAttribute('aria-pressed', 'false'); return; }
+    ensure().catch(() => {});
+  };
+  wireXrButtons(root.querySelector('#replay-vr'), root.querySelector('#replay-ar'), root.querySelector('#replay-vr-note'), ensure);
+  const destroyOld = replay.destroy;
+  replay.destroy = () => { viewer?.destroy(); viewer = null; destroyOld(); };
 }
 
 function dashboardCards(a) {
@@ -885,6 +1000,9 @@ function setupReplay(session, root, onTime) {
   const handSmoother = session.hands ? createSmoother(state.smoother.id, people, HAND_SIZE) : null;
   const minVis = minVisibilityFor(session.engine);
   let t = 0, playing = false, raf = 0, last = 0;
+  let viewer = null;
+  const poses3d = new Array(people).fill(null);
+  const schedule = cb => { if (viewer) viewer.requestFrame(cb); else raf = requestAnimationFrame(cb); };
 
   const frameAt = ms => {
     let lo = 0, hi = times.length - 1;
@@ -903,12 +1021,14 @@ function setupReplay(session, root, onTime) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      if (!visible) { smoother.reset(p); handSmoother?.reset(p); effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
+      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
       const shown = smoother.apply(lm, offset, p, dt);
       const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
+      poses3d[p] = { lm: shown, offset: 0 };
       effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p, hands });
       if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: session.mirrored, minVis });
     }
+    viewer?.setPeople(poses3d, minVis);
   };
   const setTime = (nt, dt) => {
     t = clamp(nt, 0, durationMs);
@@ -922,22 +1042,28 @@ function setupReplay(session, root, onTime) {
     setTime(t + (now - last), clamp((now - last) / 1000, 0, 0.1));
     last = now;
     if (t >= durationMs) { playing = false; btn.textContent = '▶'; return; }
-    raf = requestAnimationFrame(tick);
+    schedule(tick);
   };
-  btn.onclick = () => {
+  const togglePlay = () => {
     playing = !playing;
     btn.textContent = playing ? '❚❚' : '▶';
     if (playing) {
       if (t >= durationMs) t = 0;
       last = performance.now();
-      raf = requestAnimationFrame(tick);
+      schedule(tick);
     } else {
       cancelAnimationFrame(raf);
     }
   };
+  btn.onclick = togglePlay;
   range.oninput = () => { effects.forEach(e => e.reset()); smoother.reset(); handSmoother?.reset(); setTime(Number(range.value)); };
   setTime(0);
-  return { destroy() { playing = false; cancelAnimationFrame(raf); } };
+  return {
+    togglePlay,
+    /** Drive playback from the 3D viewer's loop (keeps running inside a WebXR session). */
+    attachViewer(v) { viewer = v; if (v) { v.setPeople(poses3d, minVis); if (playing) { last = performance.now(); schedule(tick); } } },
+    destroy() { playing = false; cancelAnimationFrame(raf); },
+  };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1082,6 +1208,7 @@ function init() {
   setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
   setVideo(state.showVideo);
+  ui.btnLive3d.addEventListener('click', toggleLiveViewer);
   ui.selSmooth.replaceChildren(...SMOOTHING_LEVELS.map(l => {
     const opt = document.createElement('option');
     opt.value = l.id;
