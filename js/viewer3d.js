@@ -158,7 +158,9 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     out.set((mirrored ? 0.5 - lm[k] : lm[k] - 0.5) * aspect * scale, (floorY - lm[k + 1]) * scale, FIGURE_Z - z);
   };
 
+  let lastSlots = null, lastMinVis = 0.5;
   function setPeople(slots, minVis = 0.5) {
+    lastSlots = slots; lastMinVis = minVis;
     figures.forEach((fig, p) => {
       const slot = slots?.[p];
       const { joints, bones } = fig;
@@ -192,10 +194,13 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     });
   }
 
+  /** Update placement; the current poses are re-projected at once so slider changes show live. */
   function setScale(opts = {}) {
+    const before = `${scale}|${floorY}|${depth}`;
     if (opts.scale > 0) scale = opts.scale;
     if (Number.isFinite(opts.floorY)) floorY = opts.floorY;
     if (Number.isFinite(opts.depth)) depth = Math.max(0, Math.min(1.5, opts.depth));
+    if (lastSlots && before !== `${scale}|${floorY}|${depth}`) setPeople(lastSlots, lastMinVis);
   }
 
   function resize() {
