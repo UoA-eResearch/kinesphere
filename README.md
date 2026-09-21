@@ -56,6 +56,9 @@ The **Model** selector chooses the pose model, and **People** how many dancers t
 | MoveNet Lightning / Thunder | 17 (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles), no depth | 1 | TensorFlow.js models, often the smoothest on phones and laptops without a usable GPU. Thunder is the more accurate of the two. |
 | MoveNet MultiPose | 17, no depth | up to 6 | Built-in tracker keeps identities stable across frames. |
 
+The **?** panel in the app also shows a feature matrix (landmarks, depth, hands, face, people,
+identity tracking, speed, download size) generated from the same model list.
+
 Whatever the model, the dashboard metrics use the same 13 major joints, so results are comparable.
 MoveNet sessions simply leave the other MediaPipe landmark slots empty (visibility 0), which makes
 the overlay simpler (no hands, feet or face detail). Tracking more people lowers the frame rate;
@@ -66,8 +69,13 @@ pose control fires when *anyone* raises both hands. The GPU delegate (MediaPipe)
 
 Both the live view and the replay have a **3D view** button that shows the tracked skeleton as a
 life-size figure on a floor grid, which you can orbit with the mouse or a finger. Depth comes from
-MediaPipe's per-joint z estimate (so MoveNet sessions appear flat), and the figure is scaled so a
-torso is about 0.5 m with the feet on the floor.
+MediaPipe's per-joint z estimate (so MoveNet sessions appear flat). That estimate is noisy and
+exaggerated, so a **Depth** slider (remembered across visits) controls how much of it is shown:
+35% by default, 0% for a flat figure, 100% for the raw estimate. Depth is also clamped to a
+plausible reach around the hips. The figure is scaled so a torso is about 0.5 m with the feet on
+the floor. Annotated axes at the dancer's feet show x (red, the dancer's left/right), y (green,
+up) and z (blue, towards the camera), and help text under the view explains the orbit, zoom and
+pan controls.
 
 On a WebXR-capable browser with a headset (Meta Quest Browser, or Chrome/Edge with a PC headset)
 **Enter VR** places the figure about 1.8 m in front of you at life size; **Enter AR** does the same

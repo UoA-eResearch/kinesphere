@@ -11,6 +11,13 @@ const LEFT = new Set(LANDMARK_NAMES.map((n, i) => (n.startsWith('left') || n.end
 const RIGHT = new Set(LANDMARK_NAMES.map((n, i) => (n.startsWith('right') || n.endsWith('_right') ? i : -1)).filter(i => i >= 0));
 const FIGURE_Z = -1.8;   // metres in front of the viewer
 const TORSO_M = 0.5;     // assumed real torso length used to scale the figure
+/**
+ * MediaPipe's per-landmark z is nominally on the same scale as x, but its magnitude runs well
+ * above real depth and it is by far the noisiest coordinate, so it is scaled down by default
+ * and clamped to a plausible reach around the hips.
+ */
+export const DEFAULT_DEPTH = 0.35;
+const MAX_DEPTH_TORSOS = 2.5;
 
 let threePromise = null;
 /** Load three.js (and OrbitControls) from the CDN, once. */
@@ -86,6 +93,32 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
   grid.position.set(0, 0, FIGURE_Z);
   scene.add(grid);
 
+  // Annotated axes at the dancer's feet: x left/right, y up, z towards the camera / viewer.
+  const axes = new THREE.Group();
+  axes.position.set(0, 0.005, FIGURE_Z);
+  const label = (text, color, x, y, z) => {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 64;
+    const g = c.getContext('2d');
+    g.font = 'bold 34px system-ui, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 6; g.strokeStyle = 'rgba(0,0,0,0.8)'; g.strokeText(text, 256, 32);
+    g.fillStyle = color; g.fillText(text, 256, 32);
+    const tex = new THREE.CanvasTexture(c);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    sp.scale.set(1.0, 0.125, 1);
+    sp.position.set(x, y, z);
+    return sp;
+  };
+  const arrowLen = 0.6;
+  axes.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), arrowLen, 0xe34948, 0.08, 0.05));
+  axes.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), arrowLen, 0x2ea043, 0.08, 0.05));
+  axes.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), arrowLen, 0x3987e5, 0.08, 0.05));
+  axes.add(label(mirrored ? "x · dancer's right" : "x · dancer's left", '#ff8a8a', arrowLen + 0.5, 0.05, 0));
+  axes.add(label('y · up', '#7ee787', 0, arrowLen + 0.1, 0));
+  axes.add(label('z · to camera', '#8ec5ff', 0, 0.05, arrowLen + 0.25));
+  scene.add(axes);
+
   const sphere = new THREE.SphereGeometry(1, 12, 8);
   const cylinder = new THREE.CylinderGeometry(1, 1, 1, 8, 1);
   const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -114,13 +147,15 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     return { joints, bones };
   });
 
-  let scale = 2.2, floorY = 0.95;
+  let scale = 2.2, floorY = 0.95, depth = DEFAULT_DEPTH;
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), qi = new THREE.Quaternion();
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), mid = new THREE.Vector3(), sz = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const toWorld = (lm, o, i, out) => {
     const k = o + i * STRIDE;
-    out.set((mirrored ? 0.5 - lm[k] : lm[k] - 0.5) * aspect * scale, (floorY - lm[k + 1]) * scale, FIGURE_Z - lm[k + 2] * aspect * scale);
+    const zMax = MAX_DEPTH_TORSOS * TORSO_M;
+    const z = Math.max(-zMax, Math.min(zMax, lm[k + 2] * aspect * scale * depth));
+    out.set((mirrored ? 0.5 - lm[k] : lm[k] - 0.5) * aspect * scale, (floorY - lm[k + 1]) * scale, FIGURE_Z - z);
   };
 
   function setPeople(slots, minVis = 0.5) {
@@ -160,6 +195,7 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
   function setScale(opts = {}) {
     if (opts.scale > 0) scale = opts.scale;
     if (Number.isFinite(opts.floorY)) floorY = opts.floorY;
+    if (Number.isFinite(opts.depth)) depth = Math.max(0, Math.min(1.5, opts.depth));
   }
 
   function resize() {
@@ -195,11 +231,12 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     const s = await navigator.xr.requestSession(mode, { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
     session = s;
     renderer.xr.setReferenceSpaceType('local-floor');
-    if (mode === 'immersive-ar') { scene.background = null; grid.visible = false; }
+    if (mode === 'immersive-ar') { scene.background = null; grid.visible = false; axes.visible = false; }
     s.addEventListener('end', () => {
       session = null;
       scene.background = background;
       grid.visible = true;
+      axes.visible = true;
       resize();
       for (const f of endListeners) f();
     });

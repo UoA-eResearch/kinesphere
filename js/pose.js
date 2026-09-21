@@ -164,30 +164,37 @@ export const MOVENET_TO_MP = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25,
 export const ENGINES = [
   {
     id: 'lite', label: 'MediaPipe Lite', engine: 'mediapipe', variant: 'lite', maxPeople: MAX_PEOPLE,
+    landmarks: 33, depth: true, hands: false, face: 'points', runtime: 'MediaPipe', download: '6 MB', speed: 'Fastest MediaPipe',
     help: 'Fastest MediaPipe model. All 33 landmarks including face, hands and an estimated depth for each joint. Good default for one person on most devices.',
   },
   {
     id: 'full', label: 'MediaPipe Full', engine: 'mediapipe', variant: 'full', maxPeople: MAX_PEOPLE,
+    landmarks: 33, depth: true, hands: false, face: 'points', runtime: 'MediaPipe', download: '9 MB', speed: 'Medium',
     help: 'More accurate than Lite, roughly half the frame rate. 33 landmarks with depth.',
   },
   {
     id: 'heavy', label: 'MediaPipe Heavy', engine: 'mediapipe', variant: 'heavy', maxPeople: MAX_PEOPLE,
+    landmarks: 33, depth: true, hands: false, face: 'points', runtime: 'MediaPipe', download: '31 MB', speed: 'Slowest',
     help: 'Most accurate MediaPipe model and by far the slowest (a 30 MB download). Best for a powerful laptop or desktop with a GPU.',
   },
   {
     id: 'holistic', label: 'MediaPipe Holistic', engine: 'holistic', variant: 'holistic', maxPeople: 1, hands: true,
+    landmarks: 33, depth: true, hands: true, face: 'mesh', runtime: 'MediaPipe', download: '14 MB', speed: 'Slow',
     help: 'Pose plus 21 landmarks per hand and a face mesh from one model, so fingers are tracked too. Hands are recorded and replayed; the face is drawn live only. Single person, and slower than Pose Lite (14 MB download).',
   },
   {
     id: 'movenet-lightning', label: 'MoveNet Lightning', engine: 'movenet', variant: 'SinglePose.Lightning', maxPeople: 1,
+    landmarks: 17, depth: false, hands: false, face: 'points', runtime: 'TensorFlow.js', download: '5 MB', speed: 'Fastest overall',
     help: 'Very fast TensorFlow.js model, often the smoothest on phones and laptops without a GPU. Tracks 17 joints only: no depth, no hand or face detail, so the overlay is simpler. Single person only.',
   },
   {
     id: 'movenet-thunder', label: 'MoveNet Thunder', engine: 'movenet', variant: 'SinglePose.Thunder', maxPeople: 1,
+    landmarks: 17, depth: false, hands: false, face: 'points', runtime: 'TensorFlow.js', download: '13 MB', speed: 'Medium',
     help: 'More accurate MoveNet model, slower than Lightning. 17 joints, single person only.',
   },
   {
     id: 'movenet-multipose', label: 'MoveNet MultiPose', engine: 'movenet', variant: 'MultiPose.Lightning', maxPeople: MAX_PEOPLE,
+    landmarks: 17, depth: false, hands: false, face: 'points', runtime: 'TensorFlow.js', download: '9 MB', speed: 'Medium',
     help: 'MoveNet model built for groups: tracks up to 6 people with a built-in tracker that keeps identities stable. 17 joints per person, no depth. Slower than Lightning.',
   },
 ];

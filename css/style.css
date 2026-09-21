@@ -208,6 +208,9 @@ select, input[type="text"] {
 .hint { text-align: center; color: var(--muted); font-size: 0.88rem; }
 .setting-help { text-align: center; color: var(--ink-2); font-size: 0.85rem; max-width: 70ch; margin: -0.25rem auto 0; min-height: 1.2em; }
 .help-panel { max-width: 72ch; margin: 0 auto; font-size: 0.9rem; color: var(--ink-2); }
+.help-panel[open] { max-width: none; }
+.help-panel[open] dl, .help-panel[open] .fine, .help-panel[open] .cache-info { max-width: 80ch; margin-left: auto; margin-right: auto; }
+.help-panel h3.first { margin-top: 0.5rem; text-align: center; }
 .help-panel summary { cursor: pointer; color: var(--accent); text-align: center; }
 .help-panel dl { margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
 .help-panel dt { font-weight: 650; color: var(--ink); }
@@ -246,9 +249,16 @@ select, input[type="text"] {
 .replay { background: #111; border-radius: 10px; overflow: hidden; }
 .viewer3d { position: relative; aspect-ratio: 16 / 9; background: #111; border-radius: 10px; overflow: hidden; max-width: 960px; margin: 0 auto; width: 100%; }
 .viewer3d-canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+.viewer3d-help { color: var(--muted); font-size: 0.85rem; text-align: center; max-width: 72ch; margin: 0.25rem auto 0; }
+.card .viewer3d-help { text-align: left; margin-left: 0; }
+.help-panel h3 { margin-top: 1rem; }
+.help-panel .data-table td, .help-panel .data-table th { padding: 0.3rem 0.5rem; }
+.help-panel .data-table td:first-child { white-space: nowrap; }
 .viewer3d-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: center; }
 .card .viewer3d-bar { justify-content: flex-start; margin-top: 0.75rem; }
 .viewer3d-bar .meta { flex-basis: 100%; text-align: center; }
+.depth-ctl input[type="range"] { width: 110px; accent-color: var(--accent); vertical-align: middle; }
+.depth-ctl .mono { min-width: 3ch; display: inline-block; font-size: 0.85rem; }
 .card .viewer3d-bar .meta { flex-basis: auto; text-align: left; }
 .card .viewer3d { margin-top: 0.75rem; max-width: none; }
 .replay canvas { display: block; width: 100%; height: auto; }

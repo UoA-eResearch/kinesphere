@@ -73,9 +73,13 @@
         <button id="btn-live-3d" class="btn btn-sm" aria-pressed="false" title="Show the tracked pose as a 3D figure you can orbit">3D view</button>
         <button id="btn-live-vr" class="btn btn-sm" hidden>Enter VR</button>
         <button id="btn-live-ar" class="btn btn-sm" hidden>Enter AR</button>
+        <label class="select depth-ctl" title="How much of the model's depth estimate to show. MediaPipe's z is noisy and exaggerated, so less than full is usually more natural.">Depth
+          <input type="range" id="live-depth" min="0" max="100" step="5" aria-label="Depth exaggeration"> <span id="live-depth-val" class="mono"></span>
+        </label>
         <span id="live-vr-note" class="meta"></span>
       </div>
       <div id="live-3d" class="viewer3d" hidden></div>
+      <p class="viewer3d-help" data-for="live-3d" hidden>Drag to orbit, scroll or pinch to zoom, right-drag or two-finger drag to pan. Axes at the dancer's feet: <b style="color:#e34948">red x</b> = the dancer's left/right, <b style="color:#2ea043">green y</b> = up, <b style="color:#3987e5">blue z</b> = towards the camera (where you stand in VR). Grid squares are 0.5 m.</p>
       <div class="controls">
         <button id="btn-record" class="btn btn-primary" disabled>● Record</button>
         <button id="btn-stop" class="btn btn-danger" hidden>■ Stop</button>
@@ -100,6 +104,9 @@
       <p id="setting-help" class="setting-help"></p>
       <details id="help-panel" class="help-panel">
         <summary>About the model and people settings</summary>
+        <h3 class="first">Feature matrix</h3>
+        <div class="table-scroll"><table class="data-table" id="model-matrix"></table></div>
+        <p class="fine">Face: MediaPipe pose models give 11 face points (eyes, ears, nose, mouth); Holistic adds a 478-point mesh drawn live only. "Depth" is MediaPipe's per-joint z estimate used by the 3D view. Dashboard metrics use 13 major joints that every model provides.</p>
         <dl>
           <dt>MediaPipe (Lite, Full, Heavy)</dt>
           <dd>Google's Pose Landmarker. Tracks 33 landmarks per person, including the face, hands and feet, plus an estimated depth for every joint. Lite is the fastest, Heavy the most accurate and slowest. All three can track several people, but MediaPipe has no memory of who is who: people are kept apart by position, so identities can swap when dancers cross or leave the frame.</dd>
@@ -110,7 +117,7 @@
           <dt>People</dt>
           <dd>How many dancers to track at the same time (up to six). Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
           <dt>3D view and VR</dt>
-          <dd>The <em>3D view</em> button (live, and in the replay) shows the tracked skeleton as a life-size figure you can orbit with the mouse or a finger. Depth comes from MediaPipe's per-joint z estimate, so MoveNet sessions appear flat. On a WebXR-capable browser with a headset connected (Meta Quest Browser, or Chrome/Edge with a PC headset) <em>Enter VR</em> puts the figure on the floor in front of you at life size, and <em>Enter AR</em> does the same over passthrough where supported; a controller trigger toggles play/pause in the replay. VR is optional and the buttons only appear when the browser reports headset support.</dd>
+          <dd>The <em>3D view</em> button (live, and in the replay) shows the tracked skeleton as a life-size figure you can orbit with the mouse or a finger. Depth comes from MediaPipe's per-joint z estimate, so MoveNet sessions appear flat; that estimate is noisy and exaggerated, so the <em>Depth</em> slider shows 35% of it by default (0% gives a flat figure, 100% the raw estimate). On a WebXR-capable browser with a headset connected (Meta Quest Browser, or Chrome/Edge with a PC headset) <em>Enter VR</em> puts the figure on the floor in front of you at life size, and <em>Enter AR</em> does the same over passthrough where supported; a controller trigger toggles play/pause in the replay. VR is optional and the buttons only appear when the browser reports headset support.</dd>
           <dt>What does not change</dt>
           <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, speed and space are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB, with a progress bar in the preview; later uses come from the cache below).</dd>
         </dl>

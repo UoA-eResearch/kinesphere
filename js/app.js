@@ -12,7 +12,7 @@ import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable,
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
-import { createViewer3D, xrSupport, estimateBodyScale, loadThree } from './viewer3d.js';
+import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -28,6 +28,7 @@ const STYLE_KEY = 'kinesphere:style';
 const MODEL_KEY = 'kinesphere:model';
 const PEOPLE_KEY = 'kinesphere:people';
 const SMOOTH_KEY = 'kinesphere:smoothing';
+const DEPTH_KEY = 'kinesphere:depth';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -51,7 +52,7 @@ const ui = {
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
-  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
+  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -162,6 +163,15 @@ function syncSettingsUI() {
   ui.settingHelp.textContent = `${info.help} ${peopleNote}`;
   localStorage.setItem(MODEL_KEY, info.id);
   localStorage.setItem(PEOPLE_KEY, String(people));
+}
+
+function renderModelMatrix() {
+  const yes = '✓', no = '–';
+  const rows = ENGINES.map(e => `<tr><td>${escapeHtml(e.label)}</td><td>${escapeHtml(e.runtime)}</td><td class="num">${e.landmarks}</td>
+    <td>${e.depth ? yes : no}</td><td>${e.hands ? yes : no}</td><td>${e.face === 'mesh' ? 'mesh' : '11 points'}</td>
+    <td class="num">${e.maxPeople === 1 ? '1' : `up to ${e.maxPeople}`}</td><td>${e.maxPeople > 1 && e.engine === 'movenet' ? 'built-in' : e.maxPeople > 1 ? 'by position' : no}</td>
+    <td>${escapeHtml(e.speed)}</td><td class="num">${escapeHtml(e.download)}</td></tr>`).join('');
+  $('#model-matrix').innerHTML = `<thead><tr><th>Model</th><th>Runtime</th><th class="num">Landmarks</th><th>Depth (z)</th><th>Hands</th><th>Face</th><th class="num">People</th><th>Identity tracking</th><th>Speed</th><th class="num">Download</th></tr></thead><tbody>${rows}</tbody>`;
 }
 
 async function refreshCacheInfo() {
@@ -395,6 +405,26 @@ function toggleFullscreen() {
 // ---------------------------------------------------------------------------------------
 // 3D view and WebXR
 
+/** Depth exaggeration for the 3D figure (0..1.5 of the model's z estimate), remembered across visits. */
+function currentDepth() {
+  const v = Number(localStorage.getItem(DEPTH_KEY));
+  return Number.isFinite(v) && localStorage.getItem(DEPTH_KEY) !== null ? Math.max(0, Math.min(1.5, v)) : DEFAULT_DEPTH;
+}
+function setDepth(v) {
+  localStorage.setItem(DEPTH_KEY, String(v));
+  state.liveViewer?.setScale({ depth: v });
+  state.replay?.setDepth?.(v);
+  document.querySelectorAll('[data-depth-slider]').forEach(el => { el.value = String(Math.round(v * 100)); });
+  document.querySelectorAll('[data-depth-value]').forEach(el => { el.textContent = `${Math.round(v * 100)}%`; });
+}
+function wireDepthSlider(input, label) {
+  input.dataset.depthSlider = '1';
+  label.dataset.depthValue = '1';
+  input.value = String(Math.round(currentDepth() * 100));
+  label.textContent = `${Math.round(currentDepth() * 100)}%`;
+  input.addEventListener('input', () => setDepth(Number(input.value) / 100));
+}
+
 /** Show Enter VR / AR buttons when the browser offers immersive sessions, else a short note. */
 async function wireXrButtons(btnVr, btnAr, note, getViewer) {
   if (!state.xr.checked) { state.xr = { ...(await xrSupport()), checked: true }; }
@@ -423,10 +453,11 @@ function ensureLiveViewer() {
   if (state.liveViewer) return Promise.resolve(state.liveViewer);
   if (state.liveViewerPromise) return state.liveViewerPromise;
   ui.live3d.hidden = false;
+  $('.viewer3d-help[data-for="live-3d"]').hidden = false;
   ui.btnLive3d.setAttribute('aria-pressed', 'true');
   const aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
   state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: state.mirrored }).then(
-    v => { state.liveViewer = v; state.liveViewerPromise = null; return v; },
+    v => { state.liveViewer = v; state.liveViewerPromise = null; v.setScale({ depth: currentDepth() }); return v; },
     err => { state.liveViewerPromise = null; ui.live3d.hidden = true; ui.btnLive3d.setAttribute('aria-pressed', 'false'); toast(`Could not load the 3D view: ${err.message}`, 6000); throw err; },
   );
   return state.liveViewerPromise;
@@ -437,6 +468,7 @@ function toggleLiveViewer() {
     state.liveViewer.destroy();
     state.liveViewer = null;
     ui.live3d.hidden = true;
+    $('.viewer3d-help[data-for="live-3d"]').hidden = true;
     ui.btnLive3d.setAttribute('aria-pressed', 'false');
     return;
   }
@@ -456,7 +488,7 @@ function updateLiveBody(pose) {
   const ankle = Math.max(v(27) >= 0.5 ? Y(27) : -1, v(28) >= 0.5 ? Y(28) : -1);
   const floor = ankle >= 0 ? ankle + torso * 0.15 : (Y(23) + Y(24)) / 2 + torso * 2.3;
   body.floor = body.floor ? Math.max(body.floor * 0.995, floor) : floor; // follow the lowest point seen, slowly forgetting
-  state.liveViewer?.setScale({ scale: 0.5 / body.torso, floorY: body.floor });
+  state.liveViewer?.setScale({ scale: 0.5 / body.torso, floorY: body.floor, depth: currentDepth() });
 }
 const STRIDE_LOCAL = 4;
 
@@ -795,9 +827,13 @@ function renderDashboard() {
         <button class="btn btn-sm" id="replay-3d-toggle" aria-pressed="false" title="Show the recording as a 3D figure you can orbit">3D view</button>
         <button class="btn btn-sm" id="replay-vr" hidden>Enter VR</button>
         <button class="btn btn-sm" id="replay-ar" hidden>Enter AR</button>
+        <label class="select depth-ctl" title="How much of the model's depth estimate to show. MediaPipe's z is noisy and exaggerated, so less than full is usually more natural.">Depth
+          <input type="range" id="replay-depth" min="0" max="100" step="5" aria-label="Depth exaggeration"> <span id="replay-depth-val" class="mono"></span>
+        </label>
         <span class="meta" id="replay-vr-note"></span>
       </div>
       <div id="replay-3d" class="viewer3d" hidden></div>
+      <p class="viewer3d-help" id="replay-3d-help" hidden>Drag to orbit, scroll or pinch to zoom, right-drag or two-finger drag to pan. Axes at the dancer's feet: <b style="color:#e34948">red x</b> = the dancer's left/right, <b style="color:#2ea043">green y</b> = up, <b style="color:#3987e5">blue z</b> = towards the camera (where you stand in VR). Grid squares are 0.5 m.</p>
     </section>
     ${tabs}
     ${a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
@@ -840,12 +876,14 @@ function setupReplay3D(session, analyses, root, replay) {
     if (viewer) return Promise.resolve(viewer);
     if (viewerPromise) return viewerPromise;
     panel.hidden = false;
+    root.querySelector('#replay-3d-help').hidden = false;
     toggle.setAttribute('aria-pressed', 'true');
     viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: session.mirrored }).then(
       v => {
         viewer = v; viewerPromise = null;
         const slot = Math.max(0, analyses.findIndex(x => x.ok));
-        v.setScale(estimateBodyScale(session, slot));
+        v.setScale({ ...estimateBodyScale(session, slot), depth: currentDepth() });
+        replay.setDepth = d => v.setScale({ depth: d });
         v.onSelect(() => replay.togglePlay());
         replay.attachViewer(v);
         return v;
@@ -855,12 +893,13 @@ function setupReplay3D(session, analyses, root, replay) {
     return viewerPromise;
   };
   toggle.onclick = () => {
-    if (viewer) { replay.attachViewer(null); viewer.destroy(); viewer = null; panel.hidden = true; toggle.setAttribute('aria-pressed', 'false'); return; }
+    if (viewer) { replay.attachViewer(null); viewer.destroy(); viewer = null; panel.hidden = true; root.querySelector('#replay-3d-help').hidden = true; toggle.setAttribute('aria-pressed', 'false'); return; }
     ensure().catch(() => {});
   };
   wireXrButtons(root.querySelector('#replay-vr'), root.querySelector('#replay-ar'), root.querySelector('#replay-vr-note'), ensure);
+  wireDepthSlider(root.querySelector('#replay-depth'), root.querySelector('#replay-depth-val'));
   const destroyOld = replay.destroy;
-  replay.destroy = () => { viewer?.destroy(); viewer = null; destroyOld(); };
+  replay.destroy = () => { viewer?.destroy(); viewer = null; replay.setDepth = null; destroyOld(); };
 }
 
 function dashboardCards(a) {
@@ -1172,6 +1211,7 @@ function init() {
   const savedPeople = Number(localStorage.getItem(PEOPLE_KEY));
   if (savedPeople >= 1 && savedPeople <= MAX_PEOPLE) ui.selPeople.value = String(savedPeople);
   syncSettingsUI();
+  renderModelMatrix();
   ui.selModel.addEventListener('change', onSettingsChanged);
   ui.selPeople.addEventListener('change', onSettingsChanged);
   ui.btnHelp.addEventListener('click', () => {
@@ -1209,6 +1249,7 @@ function init() {
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
   setVideo(state.showVideo);
   ui.btnLive3d.addEventListener('click', toggleLiveViewer);
+  wireDepthSlider(ui.liveDepth, ui.liveDepthVal);
   ui.selSmooth.replaceChildren(...SMOOTHING_LEVELS.map(l => {
     const opt = document.createElement('option');
     opt.value = l.id;
