@@ -41,7 +41,7 @@ const TEMPLATE_POSE = [
 const ui = {
   video: $('#video'), canvas: $('#overlay'), stage: $('#stage'), placeholder: $('#stage-placeholder'),
   cameraError: $('#camera-error'), cameraStatus: $('#camera-status'), btnCamera: $('#btn-camera'), btnRecord: $('#btn-record'), btnStop: $('#btn-stop'),
-  chkGesture: $('#chk-gesture'), selModel: $('#sel-model'), selPeople: $('#sel-people'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'),
+  chkGesture: $('#chk-gesture'), chkMirror: $('#chk-mirror'), selModel: $('#sel-model'), selPeople: $('#sel-people'), selCamera: $('#sel-camera'), cameraWrap: $('#camera-wrap'),
   settingHelp: $('#setting-help'), helpPanel: $('#help-panel'), btnHelp: $('#btn-help'),
   cacheInfo: $('#cache-info'), btnClearCache: $('#btn-clear-cache'),
   status: $('#status'), fps: $('#fps'),
@@ -53,7 +53,7 @@ const ui = {
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
-  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveMirror: $('#live-mirror'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
+  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -61,7 +61,7 @@ const state = {
   view: 'live',
   detector: null, detectorPromise: null, detecting: false,
   tracker: createTracker(1), effects: [],
-  stream: null, deviceId: null, mirrored: true, loopRunning: false, lastVideoTime: -1,
+  stream: null, deviceId: null, mirrored: true, facing: 'user', loopRunning: false, lastVideoTime: -1,
   recording: null, countdown: null, hold: null, lockoutUntil: 0,
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
@@ -266,9 +266,11 @@ async function attachStream(stream, requestedDeviceId = null) {
   resizeCanvas();
   const settingsOf = stream.getVideoTracks()[0]?.getSettings?.() ?? {};
   state.deviceId = requestedDeviceId || settingsOf.deviceId || null;
-  // Rear (environment-facing) cameras show the scene as it is; everything else is a mirror.
-  state.mirrored = settingsOf.facingMode !== 'environment';
-  ui.stage.classList.toggle('no-mirror', !state.mirrored);
+  // Rear (environment-facing) cameras show the scene as it is; everything else is a mirror,
+  // unless the user chose otherwise for this kind of camera.
+  state.facing = settingsOf.facingMode === 'environment' ? 'environment' : 'user';
+  const stored = localStorage.getItem(mirrorKeyFor(state.facing));
+  applyLiveMirror(stored ? stored === 'on' : state.facing !== 'environment', { remember: false });
   await refreshCameraList();
 }
 
@@ -418,21 +420,19 @@ function setDepth(v) {
   document.querySelectorAll('[data-depth-slider]').forEach(el => { el.value = String(Math.round(v * 100)); });
   document.querySelectorAll('[data-depth-value]').forEach(el => { el.textContent = `${Math.round(v * 100)}%`; });
 }
-/** Whether 3D figures are shown mirrored (like the selfie preview). Remembered; default on. */
-function mirror3d() { return localStorage.getItem(MIRROR3D_KEY) !== 'off'; }
-function setMirror3d(on) {
-  localStorage.setItem(MIRROR3D_KEY, on ? 'on' : 'off');
-  document.querySelectorAll('[data-mirror3d]').forEach(el => { el.checked = on; });
-  state.liveViewer?.setMirror(viewerMirror(state.mirrored));
-  state.replay?.setMirror?.(on);
+/**
+ * Mirror view for the live stage: flips the camera feed, overlay and 3D figure together.
+ * Defaults to mirrored for front cameras and un-mirrored for rear ones; an explicit choice
+ * is remembered per camera facing.
+ */
+function mirrorKeyFor(facing) { return `${MIRROR3D_KEY}:${facing === 'environment' ? 'rear' : 'front'}`; }
+function applyLiveMirror(on, { remember = true } = {}) {
+  state.mirrored = Boolean(on);
+  ui.chkMirror.checked = state.mirrored;
+  ui.stage.classList.toggle('no-mirror', !state.mirrored);
+  state.liveViewer?.setMirror(state.mirrored);
+  if (remember) localStorage.setItem(mirrorKeyFor(state.facing), state.mirrored ? 'on' : 'off');
 }
-function wireMirrorToggle(input) {
-  input.dataset.mirror3d = '1';
-  input.checked = mirror3d();
-  input.addEventListener('change', () => setMirror3d(input.checked));
-}
-/** Viewer mirror flag for a source whose 2D preview is `previewMirrored`: the toggle flips relative to that. */
-const viewerMirror = previewMirrored => (mirror3d() ? previewMirrored : !previewMirrored);
 
 function wireDepthSlider(input, label) {
   input.dataset.depthSlider = '1';
@@ -473,7 +473,7 @@ function ensureLiveViewer() {
   $('.viewer3d-help[data-for="live-3d"]').hidden = false;
   ui.btnLive3d.setAttribute('aria-pressed', 'true');
   const aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
-  state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: viewerMirror(state.mirrored) }).then(
+  state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: state.mirrored }).then(
     v => { state.liveViewer = v; state.liveViewerPromise = null; v.setScale({ depth: currentDepth() }); return v; },
     err => { state.liveViewerPromise = null; ui.live3d.hidden = true; ui.btnLive3d.setAttribute('aria-pressed', 'false'); toast(`Could not load the 3D view: ${err.message}`, 6000); throw err; },
   );
@@ -844,8 +844,8 @@ function renderDashboard() {
         <button class="btn btn-sm" id="replay-3d-toggle" aria-pressed="false" title="Show the recording as a 3D figure you can orbit">3D view</button>
         <button class="btn btn-sm" id="replay-vr" hidden>Enter VR</button>
         <button class="btn btn-sm" id="replay-ar" hidden>Enter AR</button>
-        <label class="check" title="Mirror the figure left-to-right, as in the camera preview. Untick to see the dancer as someone facing them would.">
-          <input type="checkbox" id="replay-mirror"> Mirror</label>
+        <label class="check" title="Show the replay and 3D figure mirrored, as the dancer saw the preview. Untick to see the dancer as someone facing them would.">
+          <input type="checkbox" id="replay-mirror"> Mirror view</label>
         <label class="select depth-ctl" title="How much of the model's depth estimate to show. MediaPipe's z is noisy and exaggerated, so less than full is usually more natural.">Depth
           <input type="range" id="replay-depth" min="0" max="100" step="5" aria-label="Depth exaggeration"> <span id="replay-depth-val" class="mono"></span>
         </label>
@@ -897,13 +897,13 @@ function setupReplay3D(session, analyses, root, replay) {
     panel.hidden = false;
     root.querySelector('#replay-3d-help').hidden = false;
     toggle.setAttribute('aria-pressed', 'true');
-    viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: viewerMirror(session.mirrored) }).then(
+    viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: replay.mirrorView }).then(
       v => {
         viewer = v; viewerPromise = null;
         const slot = Math.max(0, analyses.findIndex(x => x.ok));
         v.setScale({ ...estimateBodyScale(session, slot), depth: currentDepth() });
         replay.setDepth = d => v.setScale({ depth: d });
-        replay.setMirror = () => v.setMirror(viewerMirror(session.mirrored));
+        replay.setMirror = on => v.setMirror(on);
         v.onSelect(() => replay.togglePlay());
         replay.attachViewer(v);
         return v;
@@ -918,7 +918,9 @@ function setupReplay3D(session, analyses, root, replay) {
   };
   wireXrButtons(root.querySelector('#replay-vr'), root.querySelector('#replay-ar'), root.querySelector('#replay-vr-note'), ensure);
   wireDepthSlider(root.querySelector('#replay-depth'), root.querySelector('#replay-depth-val'));
-  wireMirrorToggle(root.querySelector('#replay-mirror'));
+  const mirrorBox = root.querySelector('#replay-mirror');
+  mirrorBox.checked = replay.mirrorView;
+  mirrorBox.addEventListener('change', () => replay.setMirrorView(mirrorBox.checked));
   const destroyOld = replay.destroy;
   replay.destroy = () => { viewer?.destroy(); viewer = null; replay.setDepth = null; replay.setMirror = null; destroyOld(); };
 }
@@ -1061,6 +1063,7 @@ function setupReplay(session, root, onTime) {
   const minVis = minVisibilityFor(session.engine);
   let t = 0, playing = false, raf = 0, last = 0;
   let viewer = null;
+  let mirrorView = session.mirrored; // how the dancer saw the preview; the toggle can flip it
   const poses3d = new Array(people).fill(null);
   const schedule = cb => { if (viewer) viewer.requestFrame(cb); else raf = requestAnimationFrame(cb); };
 
@@ -1081,12 +1084,12 @@ function setupReplay(session, root, onTime) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p }); continue; }
+      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p }); continue; }
       const shown = smoother.apply(lm, offset, p, dt);
       const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
       poses3d[p] = { lm: shown, offset: 0 };
-      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: session.mirrored, minVis, person: p, hands });
-      if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: session.mirrored, minVis });
+      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, hands });
+      if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
     }
     viewer?.setPeople(poses3d, minVis);
   };
@@ -1118,12 +1121,21 @@ function setupReplay(session, root, onTime) {
   btn.onclick = togglePlay;
   range.oninput = () => { effects.forEach(e => e.reset()); smoother.reset(); handSmoother?.reset(); setTime(Number(range.value)); };
   setTime(0);
-  return {
+  const api = {
     togglePlay,
+    get mirrorView() { return mirrorView; },
+    /** Flip the 2D replay and the 3D figure together. */
+    setMirrorView(on) {
+      mirrorView = Boolean(on);
+      effects.forEach(e => e.reset());
+      draw();
+      api.setMirror?.(mirrorView);
+    },
     /** Drive playback from the 3D viewer's loop (keeps running inside a WebXR session). */
     attachViewer(v) { viewer = v; if (v) { v.setPeople(poses3d, minVis); if (playing) { last = performance.now(); schedule(tick); } } },
     destroy() { playing = false; cancelAnimationFrame(raf); },
   };
+  return api;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1271,7 +1283,7 @@ function init() {
   setVideo(state.showVideo);
   ui.btnLive3d.addEventListener('click', toggleLiveViewer);
   wireDepthSlider(ui.liveDepth, ui.liveDepthVal);
-  wireMirrorToggle(ui.liveMirror);
+  ui.chkMirror.addEventListener('change', () => applyLiveMirror(ui.chkMirror.checked));
   ui.selSmooth.replaceChildren(...SMOOTHING_LEVELS.map(l => {
     const opt = document.createElement('option');
     opt.value = l.id;

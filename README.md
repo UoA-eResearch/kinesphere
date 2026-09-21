@@ -29,7 +29,8 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
    sparks that fly off fast-moving joints, or a constellation. The same style is used in the
    dashboard replay. Styles are purely visual; the recorded data is identical.
    If you have more than one camera a **Camera** selector appears next to the model selector;
-   your choice is remembered. Rear-facing cameras are shown un-mirrored.
+   your choice is remembered. Rear-facing cameras are shown un-mirrored, and **Mirror view** in
+   the controls flips the feed, overlay and 3D figure either way.
 2. **Record.** Either press **Record**, press <kbd>Space</kbd>, or use *pose control*:
    raise both hands above your head and hold them there for 1.5 s. A 3-second countdown
    follows so you can get into position. The same gesture (or **Stop** / <kbd>Space</kbd>)
@@ -75,8 +76,10 @@ exaggerated, so a **Depth** slider (remembered across visits) controls how much 
 plausible reach around the hips. The figure is scaled so a torso is about 0.5 m with the feet on
 the floor. Annotated axes at the dancer's feet show x (red, the dancer's left/right), y (green,
 up) and z (blue, towards the camera), and help text under the view explains the orbit, zoom and
-pan controls. A **Mirror** toggle (on by default, remembered) shows the figure flipped left-to-right
-like the camera preview; untick it to see the dancer as someone facing them would.
+pan controls. The **Mirror view** checkbox in the live controls flips the camera feed, overlay and 3D
+figure together (on by default for front cameras, off for rear ones, remembered per kind of
+camera); the replay has its own Mirror view toggle that flips the 2D replay and its 3D figure.
+Untick it to see the dancer as someone facing them would.
 
 On a WebXR-capable browser with a headset (Meta Quest Browser, or Chrome/Edge with a PC headset)
 **Enter VR** places the figure about 1.8 m in front of you at life size; **Enter AR** does the same
