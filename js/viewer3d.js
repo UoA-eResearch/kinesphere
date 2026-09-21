@@ -67,7 +67,8 @@ export function estimateBodyScale(session, slot = 0) {
  * The viewer runs its own render loop (also inside a WebXR session); `requestFrame(cb)` lets a
  * playback loop ride on it so playback keeps going while presenting to a headset.
  */
-export async function createViewer3D(container, { people = 1, aspect = 16 / 9, mirrored = true } = {}) {
+export async function createViewer3D(container, { people = 1, aspect = 16 / 9, mirrored: mirrorInit = true } = {}) {
+  let mirrored = Boolean(mirrorInit);
   const { THREE, OrbitControls } = await loadThree();
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -114,7 +115,13 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
   axes.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), arrowLen, 0xe34948, 0.08, 0.05));
   axes.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), arrowLen, 0x2ea043, 0.08, 0.05));
   axes.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), arrowLen, 0x3987e5, 0.08, 0.05));
-  axes.add(label(mirrored ? "x · dancer's right" : "x · dancer's left", '#ff8a8a', arrowLen + 0.5, 0.05, 0));
+  let xLabel = null;
+  const setXLabel = () => {
+    if (xLabel) { axes.remove(xLabel); xLabel.material.map.dispose(); xLabel.material.dispose(); }
+    xLabel = label(mirrored ? "x · dancer's right" : "x · dancer's left", '#ff8a8a', arrowLen + 0.5, 0.05, 0);
+    axes.add(xLabel);
+  };
+  setXLabel();
   axes.add(label('y · up', '#7ee787', 0, arrowLen + 0.1, 0));
   axes.add(label('z · to camera', '#8ec5ff', 0, 0.05, arrowLen + 0.25));
   scene.add(axes);
@@ -194,6 +201,14 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     });
   }
 
+  /** Flip the figure left-to-right (mirror view) and re-project at once. */
+  function setMirror(on) {
+    if (mirrored === Boolean(on)) return;
+    mirrored = Boolean(on);
+    setXLabel();
+    if (lastSlots) setPeople(lastSlots, lastMinVis);
+  }
+
   /** Update placement; the current poses are re-projected at once so slider changes show live. */
   function setScale(opts = {}) {
     const before = `${scale}|${floorY}|${depth}`;
@@ -252,6 +267,8 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
   return {
     setPeople,
     setScale,
+    setMirror,
+    get mirrored() { return mirrored; },
     /** World position of a joint as last projected (null when hidden). Mainly for tests. */
     jointPosition(person, index) {
       const fig = figures[person];

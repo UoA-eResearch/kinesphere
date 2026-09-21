@@ -29,6 +29,7 @@ const MODEL_KEY = 'kinesphere:model';
 const PEOPLE_KEY = 'kinesphere:people';
 const SMOOTH_KEY = 'kinesphere:smoothing';
 const DEPTH_KEY = 'kinesphere:depth';
+const MIRROR3D_KEY = 'kinesphere:mirror3d';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -52,7 +53,7 @@ const ui = {
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
-  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
+  live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveMirror: $('#live-mirror'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
 const overlayCtx = ui.canvas.getContext('2d');
 
@@ -417,6 +418,22 @@ function setDepth(v) {
   document.querySelectorAll('[data-depth-slider]').forEach(el => { el.value = String(Math.round(v * 100)); });
   document.querySelectorAll('[data-depth-value]').forEach(el => { el.textContent = `${Math.round(v * 100)}%`; });
 }
+/** Whether 3D figures are shown mirrored (like the selfie preview). Remembered; default on. */
+function mirror3d() { return localStorage.getItem(MIRROR3D_KEY) !== 'off'; }
+function setMirror3d(on) {
+  localStorage.setItem(MIRROR3D_KEY, on ? 'on' : 'off');
+  document.querySelectorAll('[data-mirror3d]').forEach(el => { el.checked = on; });
+  state.liveViewer?.setMirror(viewerMirror(state.mirrored));
+  state.replay?.setMirror?.(on);
+}
+function wireMirrorToggle(input) {
+  input.dataset.mirror3d = '1';
+  input.checked = mirror3d();
+  input.addEventListener('change', () => setMirror3d(input.checked));
+}
+/** Viewer mirror flag for a source whose 2D preview is `previewMirrored`: the toggle flips relative to that. */
+const viewerMirror = previewMirrored => (mirror3d() ? previewMirrored : !previewMirrored);
+
 function wireDepthSlider(input, label) {
   input.dataset.depthSlider = '1';
   label.dataset.depthValue = '1';
@@ -456,7 +473,7 @@ function ensureLiveViewer() {
   $('.viewer3d-help[data-for="live-3d"]').hidden = false;
   ui.btnLive3d.setAttribute('aria-pressed', 'true');
   const aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
-  state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: state.mirrored }).then(
+  state.liveViewerPromise = createViewer3D(ui.live3d, { people: MAX_PEOPLE, aspect, mirrored: viewerMirror(state.mirrored) }).then(
     v => { state.liveViewer = v; state.liveViewerPromise = null; v.setScale({ depth: currentDepth() }); return v; },
     err => { state.liveViewerPromise = null; ui.live3d.hidden = true; ui.btnLive3d.setAttribute('aria-pressed', 'false'); toast(`Could not load the 3D view: ${err.message}`, 6000); throw err; },
   );
@@ -827,6 +844,8 @@ function renderDashboard() {
         <button class="btn btn-sm" id="replay-3d-toggle" aria-pressed="false" title="Show the recording as a 3D figure you can orbit">3D view</button>
         <button class="btn btn-sm" id="replay-vr" hidden>Enter VR</button>
         <button class="btn btn-sm" id="replay-ar" hidden>Enter AR</button>
+        <label class="check" title="Mirror the figure left-to-right, as in the camera preview. Untick to see the dancer as someone facing them would.">
+          <input type="checkbox" id="replay-mirror"> Mirror</label>
         <label class="select depth-ctl" title="How much of the model's depth estimate to show. MediaPipe's z is noisy and exaggerated, so less than full is usually more natural.">Depth
           <input type="range" id="replay-depth" min="0" max="100" step="5" aria-label="Depth exaggeration"> <span id="replay-depth-val" class="mono"></span>
         </label>
@@ -878,12 +897,13 @@ function setupReplay3D(session, analyses, root, replay) {
     panel.hidden = false;
     root.querySelector('#replay-3d-help').hidden = false;
     toggle.setAttribute('aria-pressed', 'true');
-    viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: session.mirrored }).then(
+    viewerPromise = createViewer3D(panel, { people: session.people || 1, aspect: session.width / session.height, mirrored: viewerMirror(session.mirrored) }).then(
       v => {
         viewer = v; viewerPromise = null;
         const slot = Math.max(0, analyses.findIndex(x => x.ok));
         v.setScale({ ...estimateBodyScale(session, slot), depth: currentDepth() });
         replay.setDepth = d => v.setScale({ depth: d });
+        replay.setMirror = () => v.setMirror(viewerMirror(session.mirrored));
         v.onSelect(() => replay.togglePlay());
         replay.attachViewer(v);
         return v;
@@ -898,8 +918,9 @@ function setupReplay3D(session, analyses, root, replay) {
   };
   wireXrButtons(root.querySelector('#replay-vr'), root.querySelector('#replay-ar'), root.querySelector('#replay-vr-note'), ensure);
   wireDepthSlider(root.querySelector('#replay-depth'), root.querySelector('#replay-depth-val'));
+  wireMirrorToggle(root.querySelector('#replay-mirror'));
   const destroyOld = replay.destroy;
-  replay.destroy = () => { viewer?.destroy(); viewer = null; replay.setDepth = null; destroyOld(); };
+  replay.destroy = () => { viewer?.destroy(); viewer = null; replay.setDepth = null; replay.setMirror = null; destroyOld(); };
 }
 
 function dashboardCards(a) {
@@ -1250,6 +1271,7 @@ function init() {
   setVideo(state.showVideo);
   ui.btnLive3d.addEventListener('click', toggleLiveViewer);
   wireDepthSlider(ui.liveDepth, ui.liveDepthVal);
+  wireMirrorToggle(ui.liveMirror);
   ui.selSmooth.replaceChildren(...SMOOTHING_LEVELS.map(l => {
     const opt = document.createElement('option');
     opt.value = l.id;

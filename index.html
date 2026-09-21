@@ -73,13 +73,15 @@
         <button id="btn-live-3d" class="btn btn-sm" aria-pressed="false" title="Show the tracked pose as a 3D figure you can orbit">3D view</button>
         <button id="btn-live-vr" class="btn btn-sm" hidden>Enter VR</button>
         <button id="btn-live-ar" class="btn btn-sm" hidden>Enter AR</button>
+        <label class="check" title="Mirror the figure left-to-right, as in the camera preview. Untick to see the dancer as someone facing them would.">
+          <input type="checkbox" id="live-mirror"> Mirror</label>
         <label class="select depth-ctl" title="How much of the model's depth estimate to show. MediaPipe's z is noisy and exaggerated, so less than full is usually more natural.">Depth
           <input type="range" id="live-depth" min="0" max="100" step="5" aria-label="Depth exaggeration"> <span id="live-depth-val" class="mono"></span>
         </label>
         <span id="live-vr-note" class="meta"></span>
       </div>
       <div id="live-3d" class="viewer3d" hidden></div>
-      <p class="viewer3d-help" data-for="live-3d" hidden>Drag to orbit, scroll or pinch to zoom, right-drag or two-finger drag to pan. Axes at the dancer's feet: <b style="color:#e34948">red x</b> = the dancer's left/right, <b style="color:#2ea043">green y</b> = up, <b style="color:#3987e5">blue z</b> = towards the camera (where you stand in VR). Grid squares are 0.5 m.</p>
+      <p class="viewer3d-help" data-for="live-3d" hidden>Drag to orbit, scroll or pinch to zoom, right-drag or two-finger drag to pan. Axes at the dancer's feet: <b style="color:#e34948">red x</b> = the dancer's left/right, <b style="color:#2ea043">green y</b> = up, <b style="color:#3987e5">blue z</b> = towards the camera (where you stand in VR). <em>Mirror</em> flips the figure left-to-right so it matches the mirrored camera preview; untick it to see the dancer as someone facing them would. Grid squares are 0.5 m.</p>
       <div class="controls">
         <button id="btn-record" class="btn btn-primary" disabled>● Record</button>
         <button id="btn-stop" class="btn btn-danger" hidden>■ Stop</button>

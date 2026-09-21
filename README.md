@@ -75,7 +75,8 @@ exaggerated, so a **Depth** slider (remembered across visits) controls how much 
 plausible reach around the hips. The figure is scaled so a torso is about 0.5 m with the feet on
 the floor. Annotated axes at the dancer's feet show x (red, the dancer's left/right), y (green,
 up) and z (blue, towards the camera), and help text under the view explains the orbit, zoom and
-pan controls.
+pan controls. A **Mirror** toggle (on by default, remembered) shows the figure flipped left-to-right
+like the camera preview; untick it to see the dancer as someone facing them would.
 
 On a WebXR-capable browser with a headset (Meta Quest Browser, or Chrome/Edge with a PC headset)
 **Enter VR** places the figure about 1.8 m in front of you at life size; **Enter AR** does the same
