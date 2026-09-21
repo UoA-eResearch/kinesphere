@@ -248,9 +248,18 @@ export async function createViewer3D(container, { people = 1, aspect = 16 / 9, m
     await renderer.xr.setSession(s);
   }
 
+  const posOut = new THREE.Vector3();
   return {
     setPeople,
     setScale,
+    /** World position of a joint as last projected (null when hidden). Mainly for tests. */
+    jointPosition(person, index) {
+      const fig = figures[person];
+      if (!fig) return null;
+      fig.joints.getMatrixAt(index, m);
+      m.decompose(posOut, q, sz);
+      return sz.x === 0 ? null : { x: posOut.x, y: posOut.y, z: posOut.z };
+    },
     requestFrame(cb) { pendingFrame = cb; },
     onFrame(f) { frameListeners.add(f); return () => frameListeners.delete(f); },
     onSelect(f) { selectListeners.add(f); return () => selectListeners.delete(f); },
