@@ -330,33 +330,45 @@ export function analyze(session) {
   const shared = { small: Math.max(arm.small, leg.small), medium: Math.max(arm.medium, leg.medium), large: Math.max(arm.large, leg.large) };
   const radii = { arm, leg, shared };
 
-  // ---- Floor and standing heights. The floor in each frame is the lowest visible joint (the body
-  // always touches the floor somewhere, except mid-jump); heights are in torso units above it.
+  // ---- Floor and standing heights. The floor can only be measured when a foot (ankle, heel or
+  // toe) is visible inside the frame; then it is the lowest visible joint (the body always touches
+  // the floor somewhere, except mid-jump). Heights are in torso units above the floor.
+  const FEET = [27, 28];
+  const rawY = (k, i) => lm[(i * NUM_LANDMARKS + k) * STRIDE + 1];
+  const rawVisible = (k, i) => lm[(i * NUM_LANDMARKS + k) * STRIDE + 3] >= VIS_MIN;
+  const onScreen = y => y >= 0 && y <= 1;
   const floorY = new Float32Array(n).fill(NaN);
+  const floorMeasured = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     if (!valid[i]) continue;
+    const footInView = FEET.some(k => visible(k, i) && onScreen(Y[k][i])) || FLOOR_EXTRA.some(k => rawVisible(k, i) && onScreen(rawY(k, i)));
+    if (!footInView) continue; // feet cropped out of the frame: the lowest visible joint is not the floor
     let low = -Infinity;
-    for (const k of MAJOR) if (k !== 0 && visible(k, i) && Y[k][i] > low) low = Y[k][i];
-    for (const k of FLOOR_EXTRA) {
-      const o = (i * NUM_LANDMARKS + k) * STRIDE;
-      if (lm[o + 3] >= VIS_MIN && lm[o + 1] > low) low = lm[o + 1];
-    }
-    if (Number.isFinite(low)) floorY[i] = low;
+    for (const k of MAJOR) if (k !== 0 && visible(k, i) && onScreen(Y[k][i]) && Y[k][i] > low) low = Y[k][i];
+    for (const k of FLOOR_EXTRA) if (rawVisible(k, i) && onScreen(rawY(k, i)) && rawY(k, i) > low) low = rawY(k, i);
+    if (Number.isFinite(low)) { floorY[i] = low; floorMeasured[i] = 1; }
   }
   const heightOf = (y, i) => (floorY[i] - y) / frameScale[i];
-  const shoulderHeights = [], kneeHeights = [];
+  const shoulderHeights = [], kneeHeights = [], hipHeights = [];
   for (let i = 0; i < n; i++) {
-    if (!valid[i] || !Number.isFinite(floorY[i])) continue;
+    if (!floorMeasured[i]) continue;
     shoulderHeights.push(heightOf((Y[11][i] + Y[12][i]) / 2, i));
+    hipHeights.push(heightOf(cy[i], i));
     // the lower knee belongs to the supporting leg, so a raised knee does not skew the estimate
-    const ks = [25, 26].filter(k => visible(k, i)).map(k => heightOf(Y[k][i], i));
+    const ks = [25, 26].filter(k => visible(k, i) && onScreen(Y[k][i])).map(k => heightOf(Y[k][i], i));
     if (ks.length) kneeHeights.push(Math.min(...ks));
   }
   // The dancer stands for most of a session, so the upper percentiles are standing heights.
   const standing = {
     shoulder: shoulderHeights.length >= 10 ? percentile(shoulderHeights, 0.8) : limbs.shin + limbs.thigh + 1,
     knee: kneeHeights.length >= 10 ? percentile(kneeHeights, 0.8) : limbs.shin,
+    hip: hipHeights.length >= 10 ? percentile(hipHeights, 0.8) : limbs.shin + limbs.thigh,
   };
+  // Feet out of view: assume the dancer is standing and put the floor at standing hip height below
+  // the hips. High and medium are still measured; low can only be seen from the hands then.
+  for (let i = 0; i < n; i++) {
+    if (valid[i] && !floorMeasured[i]) floorY[i] = cy[i] + standing.hip * frameScale[i];
+  }
 
   // ---- Per-frame kinesphere class and space level.
   const kClass = new Int8Array(n).fill(-1), kLimb = new Int8Array(n).fill(-1), level = new Int8Array(n).fill(-1);
@@ -432,9 +444,12 @@ export function analyze(session) {
     poses: Object.fromEntries(KINESPHERE_CLASSES.map((c, k) => [c.key, typicalPose(classFrames[k])])),
     limbNames: LIMBS.map(l => l.name),
   };
+  let measured = 0;
+  for (let i = 0; i < n; i++) measured += floorMeasured[i];
   const levels = {
     shares: Object.fromEntries(SPACE_LEVELS.map((l, k) => [l.key, shareOf(level, k)])),
     standing,
+    feetInView: validCount ? measured / validCount : 0,
   };
 
   // Space: where the body centre was in the frame (selfie view, normalised 0..1).
@@ -499,6 +514,6 @@ export function analyze(session) {
     speed: { series: speedSeries, mean: mean(frameSpeed), peak: Number.isFinite(peak) ? peak : NaN, peakT },
     space, shapes,
     // Per-frame values for the replay's metrics overlay.
-    frames: { kClass, kLimb, level, scale: frameScale, floor: floorY, jointSpeed },
+    frames: { kClass, kLimb, level, scale: frameScale, floor: floorY, floorMeasured, jointSpeed },
   };
 }

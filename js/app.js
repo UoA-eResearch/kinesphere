@@ -983,7 +983,8 @@ function dashboardCards(a) {
       <div id="body-table"></div>
       <p class="fine"><b>Body part activity</b>: each of the 13 markers (head, shoulders, elbows, hands, hips, knees, feet) is sized and coloured by its share of all movement; <em>active time</em> is the share of the session that part moved faster than ${'0.5'} torso lengths per second.
         <b>Left / right</b>: share of movement on each side of the body (head excluded).
-        <b>Where</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).</p>
+        <b>Where</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).
+        The floor is only measured while a foot is in view (${fmtPct(a.levels.feetInView)} of this session); when the feet are out of frame the dancer is assumed to be standing, so low is then only detected from the hands.</p>
     </section>
 
     <section class="card">
@@ -1172,7 +1173,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
   const kc = F.kClass[i], lvl = F.level[i];
   const rows = [
     [`Kinesphere ${a.kinesphere.mode === '3d' ? '3D' : '2D'}`, kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
-    ['Space', lvl >= 0 ? SPACE_LEVELS[lvl].label : '–', '#fff'],
+    ['Space', lvl >= 0 ? `${SPACE_LEVELS[lvl].label}${F.floorMeasured[i] ? '' : ' (feet out of view)'}` : '–', '#fff'],
     ['Left / right', lr > 0 ? `${fmtPct(left / lr)} / ${fmtPct(right / lr)}` : '–', '#fff'],
     ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],
   ];
