@@ -416,7 +416,7 @@ export function sideFigure(container, { pose, left, right }) {
 }
 
 /**
- * Space levels: three horizontal bands (high above standing shoulder height, medium between
+ * Levels: three horizontal bands (high above standing shoulder height, medium between
  * shoulder and knee height, low below the knee), each shaded and labelled with its share.
  */
 export function levelsFigure(container, { pose, shares, labels = { high: 'High', mid: 'Medium', low: 'Low' } }) {

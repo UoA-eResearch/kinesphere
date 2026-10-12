@@ -28,7 +28,7 @@ export const KINESPHERE_CLASSES = [
   { key: 'medium', label: 'Medium' },
   { key: 'large', label: 'Large' },
 ];
-export const SPACE_LEVELS = [
+export const LEVELS = [
   { key: 'high', label: 'High' },
   { key: 'mid', label: 'Medium' },
   { key: 'low', label: 'Low' },
@@ -370,7 +370,7 @@ export function analyze(session) {
     if (valid[i] && !floorMeasured[i]) floorY[i] = cy[i] + standing.hip * frameScale[i];
   }
 
-  // ---- Per-frame kinesphere class and space level.
+  // ---- Per-frame kinesphere class and level.
   const kClass = new Int8Array(n).fill(-1), kLimb = new Int8Array(n).fill(-1), level = new Int8Array(n).fill(-1);
   const gesturing = (leg, i) => {
     const ankle = leg.pts[2];
@@ -447,12 +447,12 @@ export function analyze(session) {
   let measured = 0;
   for (let i = 0; i < n; i++) measured += floorMeasured[i];
   const levels = {
-    shares: Object.fromEntries(SPACE_LEVELS.map((l, k) => [l.key, shareOf(level, k)])),
+    shares: Object.fromEntries(LEVELS.map((l, k) => [l.key, shareOf(level, k)])),
     standing,
     feetInView: validCount ? measured / validCount : 0,
   };
 
-  // Space: where the body centre was in the frame (selfie view, normalised 0..1).
+  // Path: where the body centre was in the frame (selfie view, normalised 0..1).
   const px = new Float32Array(n).fill(NaN), py = new Float32Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
     if (!valid[i]) continue;

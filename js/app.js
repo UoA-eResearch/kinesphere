@@ -7,7 +7,7 @@ import {
 import {
   store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, handOffset, personPresent,
 } from './session.js';
-import { analyze, KINESPHERE_CLASSES, SPACE_LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
+import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
 import { lineChart, stackedBar, trajectoryPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
@@ -976,14 +976,14 @@ function dashboardCards(a) {
           <div id="side-figure"></div>
         </div>
         <div>
-          <h3>Where was the activity?</h3>
+          <h3>Level: where was the activity?</h3>
           <div id="level-figure"></div>
         </div>
       </div>
       <div id="body-table"></div>
       <p class="fine"><b>Body part activity</b>: each of the 13 markers (head, shoulders, elbows, hands, hips, knees, feet) is sized and coloured by its share of all movement; <em>active time</em> is the share of the session that part moved faster than ${'0.5'} torso lengths per second.
         <b>Left / right</b>: share of movement on each side of the body (head excluded).
-        <b>Where</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).
+        <b>Level</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).
         The floor is only measured while a foot is in view (${fmtPct(a.levels.feetInView)} of this session); when the feet are out of frame the dancer is assumed to be standing, so low is then only detected from the hands.</p>
     </section>
 
@@ -1068,13 +1068,13 @@ function mountCharts(a, session, root) {
   sideFigure(root.querySelector('#side-figure'), { pose: TEMPLATE_POSE, left: b.lateral.left, right: b.lateral.right });
   levelsFigure(root.querySelector('#level-figure'), {
     pose: TEMPLATE_POSE, shares: a.levels.shares,
-    labels: Object.fromEntries(SPACE_LEVELS.map(l => [l.key, l.label])),
+    labels: Object.fromEntries(LEVELS.map(l => [l.key, l.label])),
   });
   root.querySelector('#body-table').append(dataTable('Show body part data',
     ['Body part', 'Share of movement', 'Active time', 'Mean speed (torso lengths/s)'],
     [...b.joints.map(j => [j.name, fmtPct(j.share, 1), fmtPct(j.activeTime, 1), Number.isFinite(j.meanSpeed) ? j.meanSpeed.toFixed(2) : '–']),
       ['Left side', fmtPct(b.lateral.left, 1), '', ''], ['Right side', fmtPct(b.lateral.right, 1), '', ''],
-      ...SPACE_LEVELS.map(l => [`${l.label} level`, '', fmtPct(a.levels.shares[l.key], 1), ''])]));
+      ...LEVELS.map(l => [`${l.label} level`, '', fmtPct(a.levels.shares[l.key], 1), ''])]));
 
   state.charts.push(lineChart(root.querySelector('#speed-chart'), {
     series: a.speed.series, xMax: session.durationMs, yLabel: 'Speed (torso lengths / s)', yUnit: 'torso lengths/s',
@@ -1110,7 +1110,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
   const X = x => (mirror ? 1 - x : x) * w;
   const u = Math.max(1, w / 1280);
   ctx.save();
-  // Space levels: bands and the standing shoulder / knee lines.
+  // Levels: bands and the standing shoulder / knee lines.
   if (Number.isFinite(sc) && Number.isFinite(floor)) {
     const yS = (floor - a.levels.standing.shoulder * sc) * h, yK = (floor - a.levels.standing.knee * sc) * h;
     const lvl = F.level[i];
@@ -1173,7 +1173,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
   const kc = F.kClass[i], lvl = F.level[i];
   const rows = [
     [`Kinesphere ${a.kinesphere.mode === '3d' ? '3D' : '2D'}`, kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
-    ['Space', lvl >= 0 ? `${SPACE_LEVELS[lvl].label}${F.floorMeasured[i] ? '' : ' (feet out of view)'}` : '–', '#fff'],
+    ['Level', lvl >= 0 ? `${LEVELS[lvl].label}${F.floorMeasured[i] ? '' : ' (feet out of view)'}` : '–', '#fff'],
     ['Left / right', lr > 0 ? `${fmtPct(left / lr)} / ${fmtPct(right / lr)}` : '–', '#fff'],
     ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],
   ];
