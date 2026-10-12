@@ -235,7 +235,8 @@ export function analyze(session) {
   }
   const pt = (k, i) => [X[k][i], Y[k][i]];
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-  const waistAt = i => [cx[i], cy[i]];
+  // Kinesphere centre: midway between the mid-hip and the mid-shoulder (centre of the torso).
+  const centreAt = i => [(cx[i] + (X[11][i] + X[12][i]) / 2) / 2, (cy[i] + (Y[11][i] + Y[12][i]) / 2) / 2];
 
   // ---- Limb lengths from the skeleton (torso units). 2D projections only ever shorten a
   // segment, so the 90th percentile over the session approximates its true length.
@@ -244,9 +245,9 @@ export function analyze(session) {
     for (let i = 0; i < n; i++) if (valid[i] && visible(a, i) && visible(b, i)) vals.push(dist(pt(a, i), pt(b, i)) / frameScale[i]);
     return percentile(vals, 0.9);
   };
-  const fromWaistP90 = k => {
+  const fromCentreP90 = k => {
     const vals = [];
-    for (let i = 0; i < n; i++) if (valid[i] && visible(k, i)) vals.push(dist(waistAt(i), pt(k, i)) / frameScale[i]);
+    for (let i = 0; i < n; i++) if (valid[i] && visible(k, i)) vals.push(dist(centreAt(i), pt(k, i)) / frameScale[i]);
     return percentile(vals, 0.9);
   };
   const pair = (a, b) => {
@@ -258,18 +259,18 @@ export function analyze(session) {
     forearm: pair(segP90(13, 15), segP90(14, 16)),
     thigh: pair(segP90(23, 25), segP90(24, 26)),
     shin: pair(segP90(25, 27), segP90(26, 28)),
-    waistShoulder: pair(fromWaistP90(11), fromWaistP90(12)),
-    waistHip: pair(fromWaistP90(23), fromWaistP90(24)),
+    centreShoulder: pair(fromCentreP90(11), fromCentreP90(12)),
+    centreHip: pair(fromCentreP90(23), fromCentreP90(24)),
   };
   // Fall back to typical proportions (in torso lengths) when a segment was never visible, and keep
   // estimates within plausible human proportions so a run of bad detections cannot inflate them.
-  const typical = { upperArm: 0.6, forearm: 0.55, thigh: 0.9, shin: 0.85, waistShoulder: 1.05, waistHip: 0.2 };
-  const plausible = { upperArm: [0.4, 0.85], forearm: [0.35, 0.8], thigh: [0.6, 1.2], shin: [0.55, 1.15], waistShoulder: [0.8, 1.4], waistHip: [0.05, 0.45] };
+  const typical = { upperArm: 0.6, forearm: 0.55, thigh: 0.9, shin: 0.85, centreShoulder: 0.64, centreHip: 0.54 };
+  const plausible = { upperArm: [0.4, 0.85], forearm: [0.35, 0.8], thigh: [0.6, 1.2], shin: [0.55, 1.15], centreShoulder: [0.5, 1.0], centreHip: [0.5, 0.9] };
   for (const key of Object.keys(limbs)) {
     limbs[key] = limbs[key] > 0 ? clamp(limbs[key], ...plausible[key]) : typical[key];
   }
-  const arm = { small: limbs.waistShoulder, medium: limbs.waistShoulder + limbs.upperArm, large: limbs.waistShoulder + limbs.upperArm + limbs.forearm };
-  const leg = { small: limbs.waistHip, medium: limbs.waistHip + limbs.thigh, large: limbs.waistHip + limbs.thigh + limbs.shin };
+  const arm = { small: limbs.centreShoulder, medium: limbs.centreShoulder + limbs.upperArm, large: limbs.centreShoulder + limbs.upperArm + limbs.forearm };
+  const leg = { small: limbs.centreHip, medium: limbs.centreHip + limbs.thigh, large: limbs.centreHip + limbs.thigh + limbs.shin };
   // One set of concentric spheres for every limb: each level is the further of the arm and leg
   // distance (small = proximal joints, medium = elbows/knees, large = hands/feet outstretched).
   const shared = { small: Math.max(arm.small, leg.small), medium: Math.max(arm.medium, leg.medium), large: Math.max(arm.large, leg.large) };
@@ -312,7 +313,7 @@ export function analyze(session) {
   };
   for (let i = 0; i < n; i++) {
     if (!valid[i]) continue;
-    const w = waistAt(i), sc = frameScale[i];
+    const w = centreAt(i), sc = frameScale[i];
     let best = -1, bestLimb = -1;
     LIMBS.forEach((limb, li) => {
       if (limb.kind === 'leg' && !gesturing(limb, i)) return; // supporting legs are not reach
@@ -347,7 +348,7 @@ export function analyze(session) {
     return t ? c / t : 0;
   };
   // Typical pose for each kinesphere class: the real frame closest to the class's average pose
-  // (relative to the waist, torso units, selfie view), so the figure is a pose that happened.
+  // (relative to the mid-hip, torso units, selfie view), so the figure is a pose that happened.
   const poseVec = i => MAJOR.flatMap(k => [flip * (X[k][i] - cx[i]) / frameScale[i], (Y[k][i] - cy[i]) / frameScale[i]]);
   const classFrames = [[], [], []];
   for (let i = 0; i < n; i++) if (kClass[i] >= 0 && MAJOR.every(k => visible(k, i))) classFrames[kClass[i]].push(i);

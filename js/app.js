@@ -942,12 +942,12 @@ function dashboardCards(a) {
   return `
     <section class="card">
       <h2>Kinesphere</h2>
-      <p class="card-sub">How far the limbs reached from the body, as a share of the session. Three concentric spheres around the waist are sized from this dancer's own limb lengths, measured from the skeleton.</p>
+      <p class="card-sub">How far the limbs reached from the body, as a share of the session. Three concentric spheres around the centre of the torso (midway between the hips and the shoulders) are sized from this dancer's own limb lengths, measured from the skeleton.</p>
       <div class="kine-figs">${kineFigs}</div>
       <div id="kine-bar"></div>
       <div class="stat-row">
         ${stat('Pose tracked', fmtPct(a.validFraction), 'of frames')}
-        ${stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the waist')}
+        ${stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the torso centre')}
       </div>
       <div id="kine-table"></div>
       <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (shoulders and hips). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows and knees) when outstretched. <b>Large</b>: the sphere at the distance of the hands and feet when outstretched.
@@ -1033,7 +1033,7 @@ function mountCharts(a, session, root) {
   root.querySelector('#kine-table').append(dataTable('Show limb lengths and sphere sizes', ['Measure', 'Torso lengths'], [
     ['Upper arm (shoulder to elbow)', fmt(L.upperArm)], ['Forearm (elbow to wrist)', fmt(L.forearm)],
     ['Thigh (hip to knee)', fmt(L.thigh)], ['Shin (knee to ankle)', fmt(L.shin)],
-    ['Waist to shoulder', fmt(L.waistShoulder)], ['Waist to hip', fmt(L.waistHip)],
+    ['Torso centre to shoulder', fmt(L.centreShoulder)], ['Torso centre to hip', fmt(L.centreHip)],
     ['Sphere radii: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
     ['  from the arms (shoulder / + upper arm / + forearm)', `${fmt(k.radii.arm.small)} / ${fmt(k.radii.arm.medium)} / ${fmt(k.radii.arm.large)}`],
     ['  from the legs (hip / + thigh / + shin)', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
@@ -1119,8 +1119,9 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
       ctx.fillText(text, w - 10 * u, y - 6 * u);
     }
     ctx.setLineDash([]);
-    // Kinesphere spheres around the waist.
-    const wx = X((lm[23 * 4] + lm[24 * 4]) / 2), wy = (lm[23 * 4 + 1] + lm[24 * 4 + 1]) / 2 * h;
+    // Kinesphere spheres around the centre of the torso (midway between mid-hip and mid-shoulder).
+    const wx = X((lm[11 * 4] + lm[12 * 4] + lm[23 * 4] + lm[24 * 4]) / 4);
+    const wy = (lm[11 * 4 + 1] + lm[12 * 4 + 1] + lm[23 * 4 + 1] + lm[24 * 4 + 1]) / 4 * h;
     const kc = F.kClass[i];
     const R = a.kinesphere.radii.shared; // the same spheres in every frame
     [R.small, R.medium, R.large].forEach((r, ri) => {

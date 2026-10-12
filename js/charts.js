@@ -340,10 +340,11 @@ function drawStick(root, pose, { values = null, names = null, tooltip = null } =
 }
 
 /**
- * pose: 13 [x, y] points (MAJOR order) relative to the waist (mid-hip), in torso lengths, y down.
+ * pose: 13 [x, y] points (MAJOR order) relative to the mid-hip, in torso lengths, y down.
  * values: optional 13 numbers in 0..1 drawn as a per-joint heat (colour and size).
  * labels: optional 13 strings printed beside the joints (the "Show values" view).
- * rings: optional [{ r, label, active }] concentric circles around the waist (kinesphere sizes).
+ * rings: optional [{ r, label, active }] concentric circles around the centre of the torso (midway
+ *   between mid-hip and mid-shoulder), the kinesphere sizes.
  */
 export function bodyFigure(container, { pose, values = null, names = null, tooltip = null, showSides = true, labels = null, rings = null }) {
   container.classList.add('viz-figure-wrap');
@@ -352,10 +353,12 @@ export function bodyFigure(container, { pose, values = null, names = null, toolt
   const pad = 0.45;
   let minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
   let minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+  const rcx = (pose[1][0] + pose[2][0] + pose[7][0] + pose[8][0]) / 4;
+  const rcy = (pose[1][1] + pose[2][1] + pose[7][1] + pose[8][1]) / 4;
   if (rings?.length) {
     const rMax = Math.max(...rings.map(r => r.r)) + 0.1;
-    minX = Math.min(minX, -rMax); maxX = Math.max(maxX, rMax);
-    minY = Math.min(minY, -rMax); maxY = Math.max(maxY, rMax);
+    minX = Math.min(minX, rcx - rMax); maxX = Math.max(maxX, rcx + rMax);
+    minY = Math.min(minY, rcy - rMax); maxY = Math.max(maxY, rcy + rMax);
   }
   if (labels) { minX -= 0.75; maxX += 0.75; minY -= 0.15; }
   const root = svg('svg', { viewBox: `${minX} ${minY} ${maxX - minX} ${maxY - minY}`, class: 'viz-figure', role: 'img' });
@@ -363,10 +366,10 @@ export function bodyFigure(container, { pose, values = null, names = null, toolt
   if (rings?.length) {
     const g = svg('g', { class: 'viz-rings' });
     for (const ring of rings) {
-      g.append(svg('circle', { cx: 0, cy: 0, r: ring.r, class: ring.active ? 'viz-ring is-active' : 'viz-ring', style: ring.color ? `stroke:${ring.color}` : '' }));
-      if (ring.label) g.append(svg('text', { x: ring.r * 0.71 + 0.04, y: -ring.r * 0.71 - 0.04, class: 'viz-ring-label' }, [ring.label]));
+      g.append(svg('circle', { cx: rcx, cy: rcy, r: ring.r, class: ring.active ? 'viz-ring is-active' : 'viz-ring', style: ring.color ? `stroke:${ring.color}` : '' }));
+      if (ring.label) g.append(svg('text', { x: rcx + ring.r * 0.71 + 0.04, y: rcy - ring.r * 0.71 - 0.04, class: 'viz-ring-label' }, [ring.label]));
     }
-    g.append(svg('circle', { cx: 0, cy: 0, r: 0.05, class: 'viz-ring-centre' }));
+    g.append(svg('circle', { cx: rcx, cy: rcy, r: 0.05, class: 'viz-ring-centre' }));
     root.append(g);
   }
   drawStick(root, pose, { values, names, tooltip });
