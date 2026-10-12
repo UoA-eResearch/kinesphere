@@ -313,19 +313,9 @@ export function trajectoryPlot(container, { path, occupancy, aspect, durationMs 
 
 // ---- stick figure ---------------------------------------------------------------------
 
-/**
- * pose: 13 [x, y] points (MAJOR order) relative to the hips, in torso lengths, y down.
- * values: optional 13 numbers in 0..1 drawn as a per-joint heat.
- */
-export function bodyFigure(container, { pose, values = null, names = null, tooltip = null, showSides = true }) {
-  container.classList.add('viz-figure-wrap');
-  container.replaceChildren();
-  const xs = pose.map(p => p[0]), ys = pose.map(p => p[1]);
-  const pad = 0.45;
-  const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
-  const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
-  const root = svg('svg', { viewBox: `${minX} ${minY} ${maxX - minX} ${maxY - minY}`, class: 'viz-figure', role: 'img' });
-  root.style.aspectRatio = `${maxX - minX} / ${maxY - minY}`;
+const LEFT_SIDE = new Set([1, 3, 5, 7, 9, 11]);
+
+function drawStick(root, pose, { values = null, names = null, tooltip = null } = {}) {
   const [nx, ny] = pose[0];
   const neckX = (pose[1][0] + pose[2][0]) / 2, neckY = (pose[1][1] + pose[2][1]) / 2;
   const bones = svg('g', { class: 'viz-bones' });
@@ -347,10 +337,110 @@ export function bodyFigure(container, { pose, values = null, names = null, toolt
     }
     root.append(circle);
   });
+}
+
+/**
+ * pose: 13 [x, y] points (MAJOR order) relative to the waist (mid-hip), in torso lengths, y down.
+ * values: optional 13 numbers in 0..1 drawn as a per-joint heat (colour and size).
+ * labels: optional 13 strings printed beside the joints (the "Show values" view).
+ * rings: optional [{ r, label, active }] concentric circles around the waist (kinesphere sizes).
+ */
+export function bodyFigure(container, { pose, values = null, names = null, tooltip = null, showSides = true, labels = null, rings = null }) {
+  container.classList.add('viz-figure-wrap');
+  container.replaceChildren();
+  const xs = pose.map(p => p[0]), ys = pose.map(p => p[1]);
+  const pad = 0.45;
+  let minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
+  let minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+  if (rings?.length) {
+    const rMax = Math.max(...rings.map(r => r.r)) + 0.1;
+    minX = Math.min(minX, -rMax); maxX = Math.max(maxX, rMax);
+    minY = Math.min(minY, -rMax); maxY = Math.max(maxY, rMax);
+  }
+  if (labels) { minX -= 0.75; maxX += 0.75; minY -= 0.15; }
+  const root = svg('svg', { viewBox: `${minX} ${minY} ${maxX - minX} ${maxY - minY}`, class: 'viz-figure', role: 'img' });
+  root.style.aspectRatio = `${maxX - minX} / ${maxY - minY}`;
+  if (rings?.length) {
+    const g = svg('g', { class: 'viz-rings' });
+    for (const ring of rings) {
+      g.append(svg('circle', { cx: 0, cy: 0, r: ring.r, class: ring.active ? 'viz-ring is-active' : 'viz-ring', style: ring.color ? `stroke:${ring.color}` : '' }));
+      if (ring.label) g.append(svg('text', { x: ring.r * 0.71 + 0.04, y: -ring.r * 0.71 - 0.04, class: 'viz-ring-label' }, [ring.label]));
+    }
+    g.append(svg('circle', { cx: 0, cy: 0, r: 0.05, class: 'viz-ring-centre' }));
+    root.append(g);
+  }
+  drawStick(root, pose, { values, names, tooltip });
+  if (labels) {
+    pose.forEach(([x, y], j) => {
+      if (!labels[j]) return;
+      const r = values ? 0.08 + 0.15 * clamp(values[j], 0, 1) : 0.06;
+      const attrs = j === 0 ? { x, y: y - 0.32, 'text-anchor': 'middle' }
+        : LEFT_SIDE.has(j) ? { x: x - r - 0.06, y: y + 0.06, 'text-anchor': 'end' }
+          : { x: x + r + 0.06, y: y + 0.06, 'text-anchor': 'start' };
+      root.append(svg('text', { ...attrs, class: 'viz-val' }, [labels[j]]));
+    });
+  }
   if (showSides) {
     root.append(svg('text', { x: minX + 0.12, y: minY + 0.3, class: 'viz-side' }, ['L']));
     root.append(svg('text', { x: maxX - 0.12, y: minY + 0.3, class: 'viz-side', 'text-anchor': 'end' }, ['R']));
   }
+  container.append(root);
+}
+
+/** Fill colour for a share, on the lighter half of the ramp so large blocks stay calm. */
+const blockFill = (v, max) => heat(0.08 + 0.5 * clamp(max > 0 ? v / max : 0, 0, 1)).fill;
+
+/** Left / right display: the figure split down the middle, each half shaded by its share. */
+export function sideFigure(container, { pose, left, right }) {
+  container.classList.add('viz-figure-wrap');
+  container.replaceChildren();
+  const xs = pose.map(p => p[0]), ys = pose.map(p => p[1]);
+  const minX = Math.min(...xs) - 0.6, maxX = Math.max(...xs) + 0.6;
+  const minY = Math.min(...ys) - 0.5, maxY = Math.max(...ys) + 0.35, footY = maxY + 0.75;
+  const root = svg('svg', { viewBox: `${minX} ${minY} ${maxX - minX} ${footY - minY}`, class: 'viz-figure viz-side-figure', role: 'img' });
+  root.style.aspectRatio = `${maxX - minX} / ${footY - minY}`;
+  root.setAttribute('aria-label', `Left side ${fmtPct(left)}, right side ${fmtPct(right)} of movement`);
+  const m = Math.max(left, right);
+  root.append(svg('rect', { x: minX, y: minY, width: -minX - 0.02, height: maxY - minY, rx: 0.12, style: `fill:${blockFill(left, m)}` }));
+  root.append(svg('rect', { x: 0.02, y: minY, width: maxX - 0.02, height: maxY - minY, rx: 0.12, style: `fill:${blockFill(right, m)}` }));
+  root.append(svg('line', { x1: 0, x2: 0, y1: minY, y2: maxY, style: 'stroke:var(--surface);stroke-width:0.04' }));
+  drawStick(root, pose);
+  root.append(svg('text', { x: minX + 0.15, y: minY + 0.35, class: 'viz-side' }, ['L']));
+  root.append(svg('text', { x: maxX - 0.15, y: minY + 0.35, class: 'viz-side', 'text-anchor': 'end' }, ['R']));
+  root.append(svg('text', { x: minX / 2, y: maxY + 0.55, class: 'viz-big', 'text-anchor': 'middle' }, [fmtPct(left)]));
+  root.append(svg('text', { x: maxX / 2, y: maxY + 0.55, class: 'viz-big', 'text-anchor': 'middle' }, [fmtPct(right)]));
+  container.append(root);
+}
+
+/**
+ * Space levels: three horizontal bands (high above standing shoulder height, medium between
+ * shoulder and knee height, low below the knee), each shaded and labelled with its share.
+ */
+export function levelsFigure(container, { pose, shares, labels = { high: 'High', mid: 'Medium', low: 'Low' } }) {
+  container.classList.add('viz-figure-wrap');
+  container.replaceChildren();
+  const xs = pose.map(p => p[0]), ys = pose.map(p => p[1]);
+  const shoulderY = (pose[1][1] + pose[2][1]) / 2, kneeY = (pose[9][1] + pose[10][1]) / 2;
+  const figMinX = Math.min(...xs) - 0.4, figMaxX = Math.max(...xs) + 0.4;
+  const top = Math.min(...ys) - 0.9, bottom = Math.max(...ys) + 0.3;
+  const minX = figMinX - 1.35, maxX = figMaxX + 1.6;
+  const root = svg('svg', { viewBox: `${minX} ${top} ${maxX - minX} ${bottom - top}`, class: 'viz-figure viz-levels-figure', role: 'img' });
+  root.style.aspectRatio = `${maxX - minX} / ${bottom - top}`;
+  root.setAttribute('aria-label', `High ${fmtPct(shares.high)}, medium ${fmtPct(shares.mid)}, low ${fmtPct(shares.low)} of the time`);
+  const m = Math.max(shares.high, shares.mid, shares.low);
+  const bands = [['high', top, shoulderY], ['mid', shoulderY, kneeY], ['low', kneeY, bottom]];
+  for (const [key, y0, y1] of bands) {
+    const gap = 0.025;
+    const rect = svg('rect', { x: figMinX, y: y0 + gap, width: figMaxX - figMinX, height: y1 - y0 - 2 * gap, rx: 0.08, style: `fill:${blockFill(shares[key], m)}` });
+    const tip = `${labels[key]}: ${fmtPct(shares[key], 1)} of the time`;
+    rect.addEventListener('pointermove', e => showTip(e.clientX, e.clientY, escapeHtml(tip)));
+    rect.addEventListener('pointerleave', hideTip);
+    root.append(rect);
+    const cy = (y0 + y1) / 2 + 0.12;
+    root.append(svg('text', { x: figMinX - 0.15, y: cy, class: 'viz-big', 'text-anchor': 'end' }, [fmtPct(shares[key])]));
+    root.append(svg('text', { x: figMaxX + 0.15, y: cy, class: 'viz-level-label' }, [labels[key]]));
+  }
+  drawStick(root, pose);
   container.append(root);
 }
 

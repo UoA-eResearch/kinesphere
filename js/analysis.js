@@ -8,46 +8,55 @@ import { clamp, mean, median, percentile, rng } from './util.js';
 
 /** The 13 "major" joints used for activity metrics, in this order. */
 export const MAJOR = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
-export const MAJOR_NAMES = ['Nose', 'L shoulder', 'R shoulder', 'L elbow', 'R elbow', 'L wrist', 'R wrist',
-  'L hip', 'R hip', 'L knee', 'R knee', 'L ankle', 'R ankle'];
+/** Display names: 1 head, 2 shoulders, 2 elbows, 2 hands, 2 hips, 2 knees, 2 feet. */
+export const MAJOR_NAMES = ['Head', 'L shoulder', 'R shoulder', 'L elbow', 'R elbow', 'L hand', 'R hand',
+  'L hip', 'R hip', 'L knee', 'R knee', 'L foot', 'R foot'];
 /** Connections between MAJOR indices (for stick figures). Nose->neck is drawn separately. */
 export const MAJOR_CONNECTIONS = [[1, 2], [1, 3], [3, 5], [2, 4], [4, 6], [1, 7], [2, 8], [7, 8], [7, 9], [9, 11], [8, 10], [10, 12]];
+/** MAJOR slots on the dancer's left and right (head excluded). */
+export const LEFT_SLOTS = [1, 3, 5, 7, 9, 11];
+export const RIGHT_SLOTS = [2, 4, 6, 8, 10, 12];
 
 const VIS_MIN = 0.3;
-const MAX_GAP_S = 0.5; // gaps longer than this are not used for velocities
-
-const ZONE_VERTICAL = { upper: [13, 14, 15, 16], mid: [11, 12, 23, 24], lower: [25, 26, 27, 28] };
-const ZONE_LATERAL = { left: [11, 13, 15, 23, 25, 27], right: [12, 14, 16, 24, 26, 28] };
-const GRID = [
-  [[13, 15], [14, 16]], // upper: elbows + wrists
-  [[11, 23], [12, 24]], // mid: shoulders + hips
-  [[25, 27], [26, 28]], // lower: knees + ankles
-];
-export const GRID_ROWS = ['Upper (arms)', 'Mid (torso)', 'Lower (legs)'];
-export const GRID_COLS = ['Left side', 'Right side'];
+const MAX_GAP_S = 0.5;        // gaps longer than this are not used for velocities
+const ACTIVE_SPEED = 0.5;     // torso lengths / s: a body part faster than this counts as "active"
+const SCALE_WINDOW_MS = 2000; // half-window for the per-frame body scale
+const LEG_GESTURE = 0.5;      // a foot raised more than this many shin lengths is a gesture, not support
 
 export const KINESPHERE_CLASSES = [
-  { key: 'small', label: 'Small', max: 0.55 },
-  { key: 'medium', label: 'Medium', max: 0.8 },
-  { key: 'large', label: 'Large', max: Infinity },
+  { key: 'small', label: 'Small' },
+  { key: 'medium', label: 'Medium' },
+  { key: 'large', label: 'Large' },
 ];
-
-const ANGLES = [
-  { key: 'shoulderL', label: 'Shoulder', side: 'L', pts: [23, 11, 13] },
-  { key: 'shoulderR', label: 'Shoulder', side: 'R', pts: [24, 12, 14] },
-  { key: 'elbowL', label: 'Elbow', side: 'L', pts: [11, 13, 15] },
-  { key: 'elbowR', label: 'Elbow', side: 'R', pts: [12, 14, 16] },
-  { key: 'hipL', label: 'Hip', side: 'L', pts: [11, 23, 25] },
-  { key: 'hipR', label: 'Hip', side: 'R', pts: [12, 24, 26] },
-  { key: 'kneeL', label: 'Knee', side: 'L', pts: [23, 25, 27] },
-  { key: 'kneeR', label: 'Knee', side: 'R', pts: [24, 26, 28] },
+export const SPACE_LEVELS = [
+  { key: 'high', label: 'High' },
+  { key: 'mid', label: 'Medium' },
+  { key: 'low', label: 'Low' },
 ];
+/** Limbs used for the kinesphere: [proximal, mid, distal] landmark indices. */
+const LIMBS = [
+  { key: 'armL', name: 'L arm', kind: 'arm', pts: [11, 13, 15] },
+  { key: 'armR', name: 'R arm', kind: 'arm', pts: [12, 14, 16] },
+  { key: 'legL', name: 'L leg', kind: 'leg', pts: [23, 25, 27] },
+  { key: 'legR', name: 'R leg', kind: 'leg', pts: [24, 26, 28] },
+];
+const FLOOR_EXTRA = [29, 30, 31, 32]; // heels and toes, when the engine provides them
 
-function angleDeg(ax, ay, bx, by, cx, cy) {
-  const v1x = ax - bx, v1y = ay - by, v2x = cx - bx, v2y = cy - by;
-  const d = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
-  if (!d) return NaN;
-  return Math.acos(clamp((v1x * v2x + v1y * v2y) / d, -1, 1)) * 180 / Math.PI;
+/** Percentile p over a +-halfMs time window around every frame (NaN where the value is NaN). */
+function rollingPercentile(times, values, halfMs, p) {
+  const n = values.length, out = new Float32Array(n).fill(NaN);
+  let lo = 0, hi = 0;
+  const buf = [];
+  for (let i = 0; i < n; i++) {
+    while (hi < n && times[hi] <= times[i] + halfMs) hi++;
+    while (lo < n && times[lo] < times[i] - halfMs) lo++;
+    if (!Number.isFinite(values[i])) continue;
+    buf.length = 0;
+    for (let j = lo; j < hi; j++) if (Number.isFinite(values[j])) buf.push(values[j]);
+    buf.sort((a, b) => a - b);
+    out[i] = buf[Math.min(buf.length - 1, Math.round(p * (buf.length - 1)))];
+  }
+  return out;
 }
 
 /**
@@ -186,21 +195,6 @@ export function analyze(session) {
     speed[k] = sp;
     meanSpeed[k] = mean(sp);
   }
-  const zoneScore = ids => mean(ids.map(k => meanSpeed[k]));
-  const normalise = obj => {
-    const total = Object.values(obj).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0) || 1;
-    return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, (Number.isFinite(v) ? v : 0) / total]));
-  };
-  const vertical = normalise(Object.fromEntries(Object.entries(ZONE_VERTICAL).map(([z, ids]) => [z, zoneScore(ids)])));
-  const lateral = normalise(Object.fromEntries(Object.entries(ZONE_LATERAL).map(([z, ids]) => [z, zoneScore(ids)])));
-  const gridRaw = GRID.map(row => row.map(ids => zoneScore(ids)));
-  const gridTotal = gridRaw.flat().reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0) || 1;
-  const grid = gridRaw.map(row => row.map(v => (Number.isFinite(v) ? v : 0) / gridTotal));
-  const maxJoint = Math.max(...MAJOR.map(k => meanSpeed[k]).filter(Number.isFinite), 1e-6);
-  const joints = MAJOR.map((k, j) => ({
-    index: k, name: MAJOR_NAMES[j], meanSpeed: meanSpeed[k], relative: (meanSpeed[k] || 0) / maxJoint,
-  }));
-
   // Overall speed over time.
   const frameSpeed = new Float32Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
@@ -213,40 +207,171 @@ export function analyze(session) {
   for (let i = 0; i < n; i++) if (smoothSpeed[i] > peak) { peak = smoothSpeed[i]; peakT = times[i]; }
   const speedSeries = bucketize(times, smoothSpeed, 400, durationMs);
 
-  // Joint angles + kinesphere openness.
-  const angleValues = Object.fromEntries(ANGLES.map(a => [a.key, new Float32Array(n).fill(NaN)]));
-  const openness = new Float32Array(n).fill(NaN);
+  // ---- Body part activity: share of movement and time spent moving, per marker ----
+  const jointSpeed = MAJOR.map(k => smoothTime(times, speed[k], 150));
+  const totalMean = MAJOR.reduce((acc, k) => acc + (Number.isFinite(meanSpeed[k]) ? meanSpeed[k] : 0), 0) || 1;
+  const maxJoint = Math.max(...MAJOR.map(k => meanSpeed[k]).filter(Number.isFinite), 1e-6);
+  const joints = MAJOR.map((k, j) => {
+    let active = 0, seen = 0;
+    for (let i = 0; i < n; i++) {
+      const v = jointSpeed[j][i];
+      if (!Number.isFinite(v)) continue;
+      seen++;
+      if (v > ACTIVE_SPEED) active++;
+    }
+    const m = Number.isFinite(meanSpeed[k]) ? meanSpeed[k] : 0;
+    return { index: k, name: MAJOR_NAMES[j], meanSpeed: meanSpeed[k], share: m / totalMean, relative: m / maxJoint, activeTime: seen ? active / seen : NaN };
+  });
+  const sideSum = slots => slots.reduce((acc, j) => acc + (Number.isFinite(meanSpeed[MAJOR[j]]) ? meanSpeed[MAJOR[j]] : 0), 0);
+  const leftSum = sideSum(LEFT_SLOTS), rightSum = sideSum(RIGHT_SLOTS);
+  const lateral = { left: leftSum / ((leftSum + rightSum) || 1), right: rightSum / ((leftSum + rightSum) || 1) };
+
+  // ---- Per-frame body scale: rolling 90th percentile of the torso length, so the scale follows
+  // the dancer moving towards or away from the camera but ignores brief foreshortening.
+  const frameScale = rollingPercentile(times, torso, SCALE_WINDOW_MS, 0.9);
+  for (let i = 0; i < n; i++) {
+    if (Number.isFinite(frameScale[i])) frameScale[i] = clamp(frameScale[i], S * 0.5, S * 2);
+    else if (valid[i]) frameScale[i] = S;
+  }
+  const pt = (k, i) => [X[k][i], Y[k][i]];
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const waistAt = i => [cx[i], cy[i]];
+
+  // ---- Limb lengths from the skeleton (torso units). 2D projections only ever shorten a
+  // segment, so the 90th percentile over the session approximates its true length.
+  const segP90 = (a, b) => {
+    const vals = [];
+    for (let i = 0; i < n; i++) if (valid[i] && visible(a, i) && visible(b, i)) vals.push(dist(pt(a, i), pt(b, i)) / frameScale[i]);
+    return percentile(vals, 0.9);
+  };
+  const fromWaistP90 = k => {
+    const vals = [];
+    for (let i = 0; i < n; i++) if (valid[i] && visible(k, i)) vals.push(dist(waistAt(i), pt(k, i)) / frameScale[i]);
+    return percentile(vals, 0.9);
+  };
+  const pair = (a, b) => {
+    const v = [a, b].filter(Number.isFinite);
+    return v.length ? mean(v) : NaN;
+  };
+  const limbs = {
+    upperArm: pair(segP90(11, 13), segP90(12, 14)),
+    forearm: pair(segP90(13, 15), segP90(14, 16)),
+    thigh: pair(segP90(23, 25), segP90(24, 26)),
+    shin: pair(segP90(25, 27), segP90(26, 28)),
+    waistShoulder: pair(fromWaistP90(11), fromWaistP90(12)),
+    waistHip: pair(fromWaistP90(23), fromWaistP90(24)),
+  };
+  // Fall back to typical proportions (in torso lengths) when a segment was never visible, and keep
+  // estimates within plausible human proportions so a run of bad detections cannot inflate them.
+  const typical = { upperArm: 0.6, forearm: 0.55, thigh: 0.9, shin: 0.85, waistShoulder: 1.05, waistHip: 0.2 };
+  const plausible = { upperArm: [0.4, 0.85], forearm: [0.35, 0.8], thigh: [0.6, 1.2], shin: [0.55, 1.15], waistShoulder: [0.8, 1.4], waistHip: [0.05, 0.45] };
+  for (const key of Object.keys(limbs)) {
+    limbs[key] = limbs[key] > 0 ? clamp(limbs[key], ...plausible[key]) : typical[key];
+  }
+  const radii = {
+    arm: { small: limbs.waistShoulder, medium: limbs.waistShoulder + limbs.upperArm, large: limbs.waistShoulder + limbs.upperArm + limbs.forearm },
+    leg: { small: limbs.waistHip, medium: limbs.waistHip + limbs.thigh, large: limbs.waistHip + limbs.thigh + limbs.shin },
+  };
+
+  // ---- Floor and standing heights. The floor in each frame is the lowest visible joint (the body
+  // always touches the floor somewhere, except mid-jump); heights are in torso units above it.
+  const floorY = new Float32Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
     if (!valid[i]) continue;
-    for (const a of ANGLES) {
-      const [p, q, r] = a.pts;
-      if (!visible(p, i) || !visible(q, i) || !visible(r, i)) continue;
-      angleValues[a.key][i] = angleDeg(X[p][i], Y[p][i], X[q][i], Y[q][i], X[r][i], Y[r][i]);
+    let low = -Infinity;
+    for (const k of MAJOR) if (k !== 0 && visible(k, i) && Y[k][i] > low) low = Y[k][i];
+    for (const k of FLOOR_EXTRA) {
+      const o = (i * NUM_LANDMARKS + k) * STRIDE;
+      if (lm[o + 3] >= VIS_MIN && lm[o + 1] > low) low = lm[o + 1];
     }
-    const arm = mean(['shoulderL', 'shoulderR', 'elbowL', 'elbowR'].map(k => angleValues[k][i] / 180));
-    const leg = mean(['hipL', 'hipR', 'kneeL', 'kneeR'].map(k => angleValues[k][i] / 180));
-    if (Number.isFinite(arm) && Number.isFinite(leg)) openness[i] = 0.6 * arm + 0.4 * leg;
-    else if (Number.isFinite(arm)) openness[i] = arm;
-    else if (Number.isFinite(leg)) openness[i] = leg;
+    if (Number.isFinite(low)) floorY[i] = low;
   }
-  const smoothOpen = smoothTime(times, openness, 250);
-  const classCounts = { small: 0, medium: 0, large: 0 };
-  let openCount = 0;
+  const heightOf = (y, i) => (floorY[i] - y) / frameScale[i];
+  const shoulderHeights = [], kneeHeights = [];
   for (let i = 0; i < n; i++) {
-    const v = smoothOpen[i];
-    if (!Number.isFinite(v)) continue;
-    openCount++;
-    classCounts[KINESPHERE_CLASSES.find(c => v < c.max).key]++;
+    if (!valid[i] || !Number.isFinite(floorY[i])) continue;
+    shoulderHeights.push(heightOf((Y[11][i] + Y[12][i]) / 2, i));
+    // the lower knee belongs to the supporting leg, so a raised knee does not skew the estimate
+    const ks = [25, 26].filter(k => visible(k, i)).map(k => heightOf(Y[k][i], i));
+    if (ks.length) kneeHeights.push(Math.min(...ks));
   }
-  const kinesphere = {
-    shares: Object.fromEntries(Object.entries(classCounts).map(([k, c]) => [k, openCount ? c / openCount : 0])),
-    meanOpenness: mean(smoothOpen),
-    series: bucketize(times, smoothOpen, 400, durationMs),
+  // The dancer stands for most of a session, so the upper percentiles are standing heights.
+  const standing = {
+    shoulder: shoulderHeights.length >= 10 ? percentile(shoulderHeights, 0.8) : limbs.shin + limbs.thigh + 1,
+    knee: kneeHeights.length >= 10 ? percentile(kneeHeights, 0.8) : limbs.shin,
   };
-  const angles = ANGLES.map(a => {
-    const vals = angleValues[a.key];
-    return { ...a, mean: mean(vals), p5: percentile(vals, 0.05), p95: percentile(vals, 0.95) };
-  });
+
+  // ---- Per-frame kinesphere class and space level.
+  const kClass = new Int8Array(n).fill(-1), kLimb = new Int8Array(n).fill(-1), level = new Int8Array(n).fill(-1);
+  const gesturing = (leg, i) => {
+    const ankle = leg.pts[2];
+    if (!visible(ankle, i) || !Number.isFinite(floorY[i])) return false;
+    return heightOf(Y[ankle][i], i) > LEG_GESTURE * limbs.shin;
+  };
+  for (let i = 0; i < n; i++) {
+    if (!valid[i]) continue;
+    const w = waistAt(i), sc = frameScale[i];
+    let best = -1, bestLimb = -1;
+    LIMBS.forEach((limb, li) => {
+      if (limb.kind === 'leg' && !gesturing(limb, i)) return; // supporting legs are not reach
+      const R = radii[limb.kind];
+      const [, mid, end] = limb.pts;
+      let c = -1;
+      if (visible(end, i)) {
+        const d = dist(w, pt(end, i)) / sc;
+        c = d <= R.small ? 0 : d <= R.medium ? 1 : 2;
+      } else if (visible(mid, i)) {
+        c = dist(w, pt(mid, i)) / sc <= R.small ? 0 : 1;
+      }
+      if (c > best) { best = c; bestLimb = li; }
+    });
+    kClass[i] = best;
+    kLimb[i] = bestLimb;
+    if (Number.isFinite(floorY[i])) {
+      let high = false, low = false;
+      for (const limb of LIMBS) {
+        if (limb.kind === 'leg' && !gesturing(limb, i)) continue;
+        const [, mid, end] = limb.pts;
+        for (const k of [mid, end]) if (visible(k, i) && heightOf(Y[k][i], i) > standing.shoulder) high = true;
+        if (limb.kind === 'arm' && visible(end, i) && heightOf(Y[end][i], i) < standing.knee) low = true;
+      }
+      if (heightOf(cy[i], i) < standing.knee) low = true; // hips below standing knee height: crouching or on the floor
+      level[i] = high ? 0 : low ? 2 : 1;
+    }
+  }
+  const shareOf = (arr, k) => {
+    let c = 0, t = 0;
+    for (let i = 0; i < n; i++) { if (arr[i] < 0) continue; t++; if (arr[i] === k) c++; }
+    return t ? c / t : 0;
+  };
+  // Typical pose for each kinesphere class: the real frame closest to the class's average pose
+  // (relative to the waist, torso units, selfie view), so the figure is a pose that happened.
+  const poseVec = i => MAJOR.flatMap(k => [flip * (X[k][i] - cx[i]) / frameScale[i], (Y[k][i] - cy[i]) / frameScale[i]]);
+  const classFrames = [[], [], []];
+  for (let i = 0; i < n; i++) if (kClass[i] >= 0 && MAJOR.every(k => visible(k, i))) classFrames[kClass[i]].push(i);
+  const typicalPose = frames => {
+    if (!frames.length) return null;
+    const stepF = Math.max(1, Math.floor(frames.length / 1500));
+    const sample = frames.filter((_, j) => j % stepF === 0).map(poseVec);
+    const avg = sample[0].map((_, d) => mean(sample.map(v => v[d])));
+    let best = sample[0], bestD = Infinity;
+    for (const v of sample) {
+      let dd = 0;
+      for (let d = 0; d < v.length; d++) dd += (v[d] - avg[d]) ** 2;
+      if (dd < bestD) { bestD = dd; best = v; }
+    }
+    return MAJOR.map((_, j) => [best[j * 2], best[j * 2 + 1]]);
+  };
+  const kinesphere = {
+    shares: Object.fromEntries(KINESPHERE_CLASSES.map((c, k) => [c.key, shareOf(kClass, k)])),
+    limbs, radii,
+    poses: Object.fromEntries(KINESPHERE_CLASSES.map((c, k) => [c.key, typicalPose(classFrames[k])])),
+    limbNames: LIMBS.map(l => l.name),
+  };
+  const levels = {
+    shares: Object.fromEntries(SPACE_LEVELS.map((l, k) => [l.key, shareOf(level, k)])),
+    standing,
+  };
 
   // Space: where the body centre was in the frame (selfie view, normalised 0..1).
   const px = new Float32Array(n).fill(NaN), py = new Float32Array(n).fill(NaN);
@@ -304,9 +429,12 @@ export function analyze(session) {
   return {
     ok: true,
     durationMs, frameCount: n, validFraction: validCount / n, fps, torsoLength: S,
-    kinesphere, angles,
-    zones: { vertical, lateral, grid, joints },
+    kinesphere,
+    body: { joints, lateral },
+    levels,
     speed: { series: speedSeries, mean: mean(frameSpeed), peak: Number.isFinite(peak) ? peak : NaN, peakT },
     space, shapes,
+    // Per-frame values for the replay's metrics overlay.
+    frames: { kClass, kLimb, level, scale: frameScale, floor: floorY, jointSpeed },
   };
 }

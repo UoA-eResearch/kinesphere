@@ -7,8 +7,8 @@ import {
 import {
   store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, handOffset, personPresent,
 } from './session.js';
-import { analyze, KINESPHERE_CLASSES, GRID_ROWS, GRID_COLS, MAJOR_NAMES } from './analysis.js';
-import { lineChart, stackedBar, heatGrid, trajectoryPlot, bodyFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
+import { analyze, KINESPHERE_CLASSES, SPACE_LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
+import { lineChart, stackedBar, trajectoryPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
@@ -30,6 +30,8 @@ const PEOPLE_KEY = 'kinesphere:people';
 const SMOOTH_KEY = 'kinesphere:smoothing';
 const DEPTH_KEY = 'kinesphere:depth';
 const MIRROR3D_KEY = 'kinesphere:mirror3d';
+const OVERLAY_METRICS_KEY = 'kinesphere:replayOverlay';
+const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -839,6 +841,7 @@ function renderDashboard() {
         <button class="btn" id="replay-play" aria-label="Play">▶</button>
         <input type="range" id="replay-range" min="0" max="${Math.max(1, session.durationMs)}" value="0" step="1" aria-label="Playback position">
         <span id="replay-time" class="mono">0:00 / ${fmtClock(session.durationMs)}</span>
+        <label class="check" title="Draw the kinesphere spheres, the standing shoulder and knee lines and the live body metrics on the replay"><input type="checkbox" id="replay-overlay"${a.ok ? '' : ' disabled'}> Metrics overlay</label>
       </div>
       <div class="viewer3d-bar">
         <button class="btn btn-sm" id="replay-3d-toggle" aria-pressed="false" title="Show the recording as a 3D figure you can orbit">3D view</button>
@@ -882,7 +885,7 @@ function renderDashboard() {
   });
 
   const onTime = t => { for (const c of state.charts) c.setCursor?.(t); };
-  state.replay = setupReplay(session, root, onTime);
+  state.replay = setupReplay(session, root, onTime, a.ok ? { analysis: a, person } : null);
   setupReplay3D(session, analyses, root, state.replay);
   if (a.ok) mountCharts(a, session, root);
 }
@@ -927,51 +930,54 @@ function setupReplay3D(session, analyses, root, replay) {
 
 function dashboardCards(a) {
   const k = a.kinesphere;
-  const angleRows = a.angles.map(x => `
-      <tr><td>${x.label}</td><td>${x.side === 'L' ? 'Left' : 'Right'}</td>
-      <td class="num">${Number.isFinite(x.mean) ? `${x.mean.toFixed(0)}°` : '–'}</td>
-      <td class="num">${Number.isFinite(x.p5) ? `${x.p5.toFixed(0)}° – ${x.p95.toFixed(0)}°` : '–'}</td></tr>`).join('');
-  const z = a.zones;
   const shapes = a.shapes.map((s, i) => `
       <div class="shape"><div class="shape-rank">#${i + 1}</div><div id="shape-${i}"></div><div class="shape-share">${fmtPct(s.share)}<small class="meta"> of the time</small></div></div>`).join('');
+  const kineFigs = KINESPHERE_CLASSES.map(c => `
+      <div class="kine-fig">
+        <div id="kine-fig-${c.key}"></div>
+        <div class="kine-fig-name">${c.label}</div>
+        <div class="kine-fig-share">${fmtPct(k.shares[c.key])}</div>
+        ${k.poses[c.key] ? '' : '<div class="meta">not reached</div>'}
+      </div>`).join('');
   return `
     <section class="card">
       <h2>Kinesphere</h2>
-      <p class="card-sub">How far the limbs reached into the space around the body, as a share of the session.</p>
+      <p class="card-sub">How far the limbs reached from the body, as a share of the session. Three concentric spheres around the waist are sized from this dancer's own limb lengths, measured from the skeleton.</p>
+      <div class="kine-figs">${kineFigs}</div>
       <div id="kine-bar"></div>
       <div class="stat-row">
-        ${stat('Mean openness', fmtPct(k.meanOpenness))}
         ${stat('Pose tracked', fmtPct(a.validFraction), 'of frames')}
+        ${stat('Arm reach', k.radii.arm.large.toFixed(2), 'torso lengths from the waist')}
       </div>
-      <h3>Openness over time</h3>
-      <div id="kine-chart"></div>
-      <h3>Joint angles</h3>
-      <div class="table-scroll"><table class="data-table">
-        <thead><tr><th>Joint</th><th>Side</th><th class="num">Mean</th><th class="num">Typical range (5th–95th pct)</th></tr></thead>
-        <tbody>${angleRows}</tbody></table></div>
-      <p class="fine">Openness averages the shoulder, elbow, hip and knee angles (0° folded → 180° fully extended), weighting arms 60% and legs 40%.
-        Below 55% counts as a small kinesphere, 55–80% medium, above 80% large. Shoulder angle is measured between the torso and the upper arm.</p>
+      <div id="kine-table"></div>
+      <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (shoulders and hips). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows and knees) when outstretched. <b>Large</b>: the sphere at the distance of the hands and feet when outstretched.
+        Each frame is classified by the furthest sphere any limb reaches into; legs only count while lifted (a standing leg is support, not reach). Each figure above is the most typical pose in that class.
+        Limb lengths are the 90th percentile of each segment's length on screen, so reaching straight towards or away from the camera is under-counted.</p>
     </section>
 
     <section class="card">
-      <h2>Where was the activity?</h2>
-      <p class="card-sub">Share of total movement by body region, from the mean speed of each joint. Left and right are the dancer's own sides.</p>
-      <div class="two-col">
+      <h2>Body</h2>
+      <p class="card-sub">Which body parts moved, on which side, and at what height the activity happened. Left and right are the dancer's own sides.</p>
+      <div class="body-grid">
         <div>
-          <div id="zone-grid"></div>
-          <div class="stat-row">
-            ${stat('Upper', fmtPct(z.vertical.upper))}${stat('Mid', fmtPct(z.vertical.mid))}${stat('Lower', fmtPct(z.vertical.lower))}
-          </div>
-          <div class="stat-row">
-            ${stat('Left side', fmtPct(z.lateral.left))}${stat('Right side', fmtPct(z.lateral.right))}
-          </div>
-        </div>
-        <div>
+          <h3>Body part activity</h3>
           <div id="body-figure"></div>
           <div id="body-legend"></div>
+          <label class="check"><input type="checkbox" id="show-values"> Show values</label>
+        </div>
+        <div>
+          <h3>Left / right</h3>
+          <div id="side-figure"></div>
+        </div>
+        <div>
+          <h3>Where was the activity?</h3>
+          <div id="level-figure"></div>
         </div>
       </div>
-      <p class="fine">Upper = elbows and wrists, mid = shoulders and hips, lower = knees and ankles. Joint dots are sized and coloured by their mean speed relative to the most active joint.</p>
+      <div id="body-table"></div>
+      <p class="fine"><b>Body part activity</b>: each of the 13 markers (head, shoulders, elbows, hands, hips, knees, feet) is sized and coloured by its share of all movement; <em>active time</em> is the share of the session that part moved faster than ${'0.5'} torso lengths per second.
+        <b>Left / right</b>: share of movement on each side of the body (head excluded).
+        <b>Where</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).</p>
     </section>
 
     <section class="card">
@@ -986,7 +992,7 @@ function dashboardCards(a) {
     </section>
 
     <section class="card">
-      <h2>Space</h2>
+      <h2>Path through the frame</h2>
       <p class="card-sub">Where the hips were in the camera frame, from start (ring) to end (filled dot). Shaded cells show where you spent the most time.</p>
       <div class="two-col">
         <div id="space-plot"></div>
@@ -1012,24 +1018,51 @@ function dashboardCards(a) {
 
 function mountCharts(a, session, root) {
   const ord = ordinalColors();
+  const k = a.kinesphere;
   stackedBar(root.querySelector('#kine-bar'), KINESPHERE_CLASSES.map((c, i) => ({
-    label: c.label, value: a.kinesphere.shares[c.key], fill: ord[i].fill, ink: ord[i].ink,
+    label: c.label, value: k.shares[c.key], fill: ord[i].fill, ink: ord[i].ink,
   })));
-  state.charts.push(lineChart(root.querySelector('#kine-chart'), {
-    series: a.kinesphere.series, yMax: 1, xMax: session.durationMs, height: 160,
-    yLabel: 'Openness', yFormat: v => fmtPct(v),
-  }));
+  const R = k.radii.arm;
+  KINESPHERE_CLASSES.forEach((c, ci) => {
+    bodyFigure(root.querySelector(`#kine-fig-${c.key}`), {
+      pose: k.poses[c.key] ?? TEMPLATE_POSE, showSides: false,
+      rings: [R.small, R.medium, R.large].map((r, ri) => ({ r, active: ri === ci, label: 'SML'[ri], color: ri === ci ? ord[ci].fill : null })),
+    });
+  });
+  const L = k.limbs, fmt = v => v.toFixed(2);
+  root.querySelector('#kine-table').append(dataTable('Show limb lengths and sphere sizes', ['Measure', 'Torso lengths'], [
+    ['Upper arm (shoulder to elbow)', fmt(L.upperArm)], ['Forearm (elbow to wrist)', fmt(L.forearm)],
+    ['Thigh (hip to knee)', fmt(L.thigh)], ['Shin (knee to ankle)', fmt(L.shin)],
+    ['Waist to shoulder', fmt(L.waistShoulder)], ['Waist to hip', fmt(L.waistHip)],
+    ['Arm spheres: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
+    ['Leg spheres: small / medium / large', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
+    ...KINESPHERE_CLASSES.map(c => [`Time in ${c.label.toLowerCase()} kinesphere`, fmtPct(k.shares[c.key], 1)]),
+  ]));
 
-  const z = a.zones;
-  heatGrid(root.querySelector('#zone-grid'), {
-    values: z.grid, rowLabels: GRID_ROWS, colLabels: GRID_COLS,
-    tooltip: (r, c, v) => `${GRID_ROWS[r]} · ${GRID_COLS[c]}: ${fmtPct(v, 1)} of movement`,
-  });
-  bodyFigure(root.querySelector('#body-figure'), {
-    pose: TEMPLATE_POSE, values: z.joints.map(j => j.relative), names: MAJOR_NAMES,
-    tooltip: (j, v) => `${MAJOR_NAMES[j]}: ${fmtPct(v)} of the most active joint (${z.joints[j].meanSpeed.toFixed(2)} torso lengths/s)`,
-  });
+  const b = a.body;
+  const drawBody = () => {
+    const show = root.querySelector('#show-values').checked;
+    bodyFigure(root.querySelector('#body-figure'), {
+      pose: TEMPLATE_POSE, values: b.joints.map(j => j.relative), names: MAJOR_NAMES,
+      labels: show ? b.joints.map(j => fmtPct(j.share)) : null,
+      tooltip: j => `${MAJOR_NAMES[j]}: ${fmtPct(b.joints[j].share, 1)} of all movement, active ${fmtPct(b.joints[j].activeTime)} of the time`,
+    });
+  };
+  const showBox = root.querySelector('#show-values');
+  showBox.checked = localStorage.getItem(SHOW_VALUES_KEY) === 'on';
+  showBox.addEventListener('change', () => { localStorage.setItem(SHOW_VALUES_KEY, showBox.checked ? 'on' : 'off'); drawBody(); });
+  drawBody();
   root.querySelector('#body-legend').append(heatLegend('Less movement', 'More movement'));
+  sideFigure(root.querySelector('#side-figure'), { pose: TEMPLATE_POSE, left: b.lateral.left, right: b.lateral.right });
+  levelsFigure(root.querySelector('#level-figure'), {
+    pose: TEMPLATE_POSE, shares: a.levels.shares,
+    labels: Object.fromEntries(SPACE_LEVELS.map(l => [l.key, l.label])),
+  });
+  root.querySelector('#body-table').append(dataTable('Show body part data',
+    ['Body part', 'Share of movement', 'Active time', 'Mean speed (torso lengths/s)'],
+    [...b.joints.map(j => [j.name, fmtPct(j.share, 1), fmtPct(j.activeTime, 1), Number.isFinite(j.meanSpeed) ? j.meanSpeed.toFixed(2) : '–']),
+      ['Left side', fmtPct(b.lateral.left, 1), '', ''], ['Right side', fmtPct(b.lateral.right, 1), '', ''],
+      ...SPACE_LEVELS.map(l => [`${l.label} level`, '', fmtPct(a.levels.shares[l.key], 1), ''])]));
 
   state.charts.push(lineChart(root.querySelector('#speed-chart'), {
     series: a.speed.series, xMax: session.durationMs, yLabel: 'Speed (torso lengths / s)', yUnit: 'torso lengths/s',
@@ -1046,7 +1079,110 @@ function mountCharts(a, session, root) {
   a.shapes.forEach((s, i) => bodyFigure(root.querySelector(`#shape-${i}`), { pose: s.pose, showSides: false }));
 }
 
-function setupReplay(session, root, onTime) {
+// ---------------------------------------------------------------------------------------
+// Replay metrics overlay: the kinesphere spheres, the standing shoulder / knee lines and the
+// live Panel 2 metrics, drawn on top of the replay for one person.
+
+const OV_ACTIVE = 0.5;   // torso lengths / s, matches the analysis "active" threshold
+const OV_KCOLORS = ['#86b6ef', '#3987e5', '#ffd166'];
+const OV_LCOLORS = { 0: 'rgba(255, 209, 102, 0.12)', 1: 'rgba(134, 182, 239, 0.10)', 2: 'rgba(235, 104, 52, 0.14)' };
+const lerpHex = (a, b, t) => {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16)), pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return `rgb(${pa.map((v, i) => Math.round(v + (pb[i] - v) * clamp(t, 0, 1))).join(',')})`;
+};
+
+function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
+  const F = a.frames;
+  if (!F || i < 0 || i >= F.kClass.length || !lm) return;
+  const sc = F.scale[i], floor = F.floor[i];
+  const X = x => (mirror ? 1 - x : x) * w;
+  const u = Math.max(1, w / 1280);
+  ctx.save();
+  // Space levels: bands and the standing shoulder / knee lines.
+  if (Number.isFinite(sc) && Number.isFinite(floor)) {
+    const yS = (floor - a.levels.standing.shoulder * sc) * h, yK = (floor - a.levels.standing.knee * sc) * h;
+    const lvl = F.level[i];
+    if (lvl >= 0) {
+      const [y0, y1] = lvl === 0 ? [0, yS] : lvl === 1 ? [yS, yK] : [yK, h];
+      ctx.fillStyle = OV_LCOLORS[lvl];
+      ctx.fillRect(0, y0, w, y1 - y0);
+    }
+    ctx.setLineDash([10 * u, 8 * u]);
+    ctx.lineWidth = 1.5 * u;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = `${Math.round(13 * u)}px system-ui, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.textAlign = 'right';
+    for (const [y, text] of [[yS, 'standing shoulder height'], [yK, 'standing knee height']]) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      ctx.fillText(text, w - 10 * u, y - 6 * u);
+    }
+    ctx.setLineDash([]);
+    // Kinesphere spheres around the waist.
+    const wx = X((lm[23 * 4] + lm[24 * 4]) / 2), wy = (lm[23 * 4 + 1] + lm[24 * 4 + 1]) / 2 * h;
+    // draw the spheres of the limb that set the class (legs have their own, longer spheres)
+    const kc = F.kClass[i], limbIdx = F.kLimb[i];
+    const R = a.kinesphere.radii[limbIdx >= 2 ? 'leg' : 'arm'];
+    [R.small, R.medium, R.large].forEach((r, ri) => {
+      ctx.beginPath();
+      ctx.arc(wx, wy, r * sc * h, 0, Math.PI * 2);
+      ctx.lineWidth = (ri === kc ? 4 : 1.5) * u;
+      ctx.strokeStyle = ri === kc ? OV_KCOLORS[ri] : 'rgba(255,255,255,0.35)';
+      ctx.stroke();
+      ctx.fillStyle = ri === kc ? OV_KCOLORS[ri] : 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'left';
+      ctx.font = `600 ${Math.round(13 * u)}px system-ui, sans-serif`;
+      ctx.fillText('SML'[ri], wx + r * sc * h * 0.71 + 4 * u, wy - r * sc * h * 0.71 - 4 * u);
+    });
+    ctx.beginPath(); ctx.arc(wx, wy, 3 * u, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+  }
+  // Body part activity markers, sized and coloured by current speed.
+  const speedNow = j => { const v = F.jointSpeed[j][i]; return Number.isFinite(v) ? v : 0; };
+  for (let j = 0; j < 13; j++) {
+    const k = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28][j];
+    if (lm[k * 4 + 3] < 0.3) continue;
+    const v = clamp(speedNow(j) / 3, 0, 1);
+    ctx.beginPath();
+    ctx.arc(X(lm[k * 4]), lm[k * 4 + 1] * h, (4 + 12 * v) * u, 0, Math.PI * 2);
+    ctx.fillStyle = lerpHex('#184f95', '#cde2fb', v);
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // Left / right over the last second, and the most active part right now.
+  let left = 0, right = 0;
+  for (let j = i; j >= 0 && times[j] >= times[i] - 1000; j--) {
+    for (const s of LEFT_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) left += v; }
+    for (const s of RIGHT_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) right += v; }
+  }
+  let top = -1, topV = OV_ACTIVE;
+  for (let j = 1; j < 13; j++) if (speedNow(j) > topV) { topV = speedNow(j); top = j; }
+  const lr = left + right;
+  const kc = F.kClass[i], lvl = F.level[i];
+  const rows = [
+    ['Kinesphere', kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
+    ['Space', lvl >= 0 ? SPACE_LEVELS[lvl].label : '–', '#fff'],
+    ['Left / right', lr > 0 ? `${fmtPct(left / lr)} / ${fmtPct(right / lr)}` : '–', '#fff'],
+    ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],
+  ];
+  if (person != null) rows.unshift(['Person', String(person + 1), '#fff']);
+  const fs = Math.round(15 * u), lh = fs * 1.45, padX = 12 * u, boxW = 260 * u, boxH = rows.length * lh + 14 * u;
+  ctx.fillStyle = 'rgba(0,0,0,0.62)';
+  ctx.fillRect(10 * u, 10 * u, boxW, boxH);
+  rows.forEach(([label, value, color], r) => {
+    const y = 10 * u + 7 * u + lh * (r + 0.75);
+    ctx.textAlign = 'left';
+    ctx.font = `${fs}px system-ui, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(label, 10 * u + padX, y);
+    ctx.font = `700 ${fs}px system-ui, sans-serif`;
+    ctx.fillStyle = color;
+    ctx.fillText(value, 10 * u + padX + 110 * u, y);
+  });
+  ctx.restore();
+}
+
+function setupReplay(session, root, onTime, metrics = null) {
   const canvas = root.querySelector('#replay-canvas');
   const range = root.querySelector('#replay-range');
   const btn = root.querySelector('#replay-play');
@@ -1065,6 +1201,16 @@ function setupReplay(session, root, onTime) {
   let viewer = null;
   let mirrorView = session.mirrored; // how the dancer saw the preview; the toggle can flip it
   const poses3d = new Array(people).fill(null);
+  const overlayBox = root.querySelector('#replay-overlay');
+  let showMetrics = Boolean(metrics) && localStorage.getItem(OVERLAY_METRICS_KEY) === 'on';
+  if (overlayBox) {
+    overlayBox.checked = showMetrics;
+    overlayBox.addEventListener('change', () => {
+      showMetrics = Boolean(metrics) && overlayBox.checked;
+      localStorage.setItem(OVERLAY_METRICS_KEY, overlayBox.checked ? 'on' : 'off');
+      draw();
+    });
+  }
   const schedule = cb => { if (viewer) viewer.requestFrame(cb); else raf = requestAnimationFrame(cb); };
 
   const frameAt = ms => {
@@ -1090,6 +1236,9 @@ function setupReplay(session, root, onTime) {
       poses3d[p] = { lm: shown, offset: 0 };
       effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, hands });
       if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
+    }
+    if (showMetrics && hasFrame && poses3d[metrics.person]) {
+      drawMetricsOverlay(ctx, metrics.analysis, i, poses3d[metrics.person].lm, w, h, mirrorView, times, people > 1 ? metrics.person : null);
     }
     viewer?.setPeople(poses3d, minVis);
   };
