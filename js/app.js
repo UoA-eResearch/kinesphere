@@ -1,7 +1,7 @@
 // Kinesphere: live pose view + recording, analysis dashboard and session library.
 
 import {
-  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE, HAND_SIZE,
+  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE, HAND_SIZE, WORLD_SIZE,
   modelCacheInfo, clearModelCache,
 } from './pose.js';
 import {
@@ -639,12 +639,14 @@ function onDetection(slots, now) {
     if (present.length && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
       const frame = new Float32Array(rec.people * FRAME_SIZE);
       const hands = rec.hands ? new Float32Array(rec.people * HAND_SIZE) : null;
+      const world = rec.world ? new Float32Array(rec.people * WORLD_SIZE) : null;
       slots.forEach((pose, p) => {
         if (!pose || p >= rec.people) return;
         frame.set(pose.lm, p * FRAME_SIZE);
         if (hands && pose.hands) hands.set(pose.hands, p * HAND_SIZE);
+        if (world && pose.world) world.set(pose.world, p * WORLD_SIZE);
       });
-      rec.frames.push({ t: now - rec.startedAt, lm: frame, hands });
+      rec.frames.push({ t: now - rec.startedAt, lm: frame, hands, world });
       rec.lastStored = now;
     }
     ui.recTime.textContent = fmtClock(now - rec.startedAt);
@@ -696,7 +698,7 @@ function startRecording(trigger, now = performance.now()) {
   if (state.recording || !state.detector) return;
   state.countdown = null;
   ui.countdown.hidden = true;
-  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people, hands: Boolean(state.detector.hands) };
+  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people, hands: Boolean(state.detector.hands), world: Boolean(state.detector.world) };
   ui.stage.classList.add('is-recording');
   ui.recBadge.hidden = false;
   ui.recTime.textContent = '0:00';
@@ -942,17 +944,21 @@ function dashboardCards(a) {
   return `
     <section class="card">
       <h2>Kinesphere</h2>
-      <p class="card-sub">How far the limbs reached from the body, as a share of the session. Three concentric spheres around the centre of the torso (midway between the hips and the shoulders) are sized from this dancer's own limb lengths, measured from the skeleton.</p>
+      <p class="card-sub">How far the limbs reached from the body, as a share of the session. Three concentric spheres around the centre of the torso (midway between the hips and the shoulders) are sized from this dancer's own limb lengths, measured from the skeleton
+        ${k.mode === '3d' ? 'in 3D (MediaPipe world landmarks), so reaches towards and away from the camera count fully.' : 'on screen in 2D, because this session has no 3D world landmarks (MoveNet, or recorded before 3D support).'}</p>
       <div class="kine-figs">${kineFigs}</div>
       <div id="kine-bar"></div>
       <div class="stat-row">
         ${stat('Pose tracked', fmtPct(a.validFraction), 'of frames')}
-        ${stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the torso centre')}
+        ${stat('Measured in', k.mode === '3d' ? '3D' : '2D', k.mode === '3d' ? `world landmarks, ${fmtPct(k.coverage3d)} of frames` : 'screen positions')}
+        ${k.metres ? stat('Arm length', ((k.metres.upperArm + k.metres.forearm) * 100).toFixed(0), 'cm, shoulder to wrist') : stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the torso centre')}
       </div>
       <div id="kine-table"></div>
       <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (shoulders and hips). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows and knees) when outstretched. <b>Large</b>: the sphere at the distance of the hands and feet when outstretched.
         Arms and legs share the same three spheres (each the further of the arm and leg distance), so the spheres stay fixed during the session. Each frame is classified by the furthest sphere any limb reaches into; legs only count while lifted (a standing leg is support, not reach). Each figure above is the most typical pose in that class.
-        Limb lengths are the 90th percentile of each segment's length on screen, so reaching straight towards or away from the camera is under-counted.</p>
+        ${k.mode === '3d'
+          ? 'Limb lengths are the median 3D length of each segment from MediaPipe\'s world landmarks (metric, in metres); distances are in torso lengths. The replay overlay draws the spheres as circles on screen, so a hand reaching towards the camera can be in the large sphere while it looks inside the circle.'
+          : 'Limb lengths are the 90th percentile of each segment\'s length on screen, so reaching straight towards or away from the camera is under-counted.'}</p>
     </section>
 
     <section class="card">
@@ -1030,15 +1036,19 @@ function mountCharts(a, session, root) {
     });
   });
   const L = k.limbs, fmt = v => v.toFixed(2);
-  root.querySelector('#kine-table').append(dataTable('Show limb lengths and sphere sizes', ['Measure', 'Torso lengths'], [
-    ['Upper arm (shoulder to elbow)', fmt(L.upperArm)], ['Forearm (elbow to wrist)', fmt(L.forearm)],
-    ['Thigh (hip to knee)', fmt(L.thigh)], ['Shin (knee to ankle)', fmt(L.shin)],
-    ['Torso centre to shoulder', fmt(L.centreShoulder)], ['Torso centre to hip', fmt(L.centreHip)],
+  const M = k.metres, cm = key => (M && Number.isFinite(M[key]) ? `${(M[key] * 100).toFixed(1)} cm` : '–');
+  const limbRow = (label, key) => (M ? [label, fmt(L[key]), cm(key)] : [label, fmt(L[key])]);
+  const pad = row => (M && row.length < 3 ? [...row, ''] : row);
+  root.querySelector('#kine-table').append(dataTable('Show limb lengths and sphere sizes', M ? ['Measure', 'Torso lengths', 'Length (3D)'] : ['Measure', 'Torso lengths'], [
+    ...(M ? [['Torso (mid-hip to mid-shoulder)', '1.00', cm('torso')]] : []),
+    limbRow('Upper arm (shoulder to elbow)', 'upperArm'), limbRow('Forearm (elbow to wrist)', 'forearm'),
+    limbRow('Thigh (hip to knee)', 'thigh'), limbRow('Shin (knee to ankle)', 'shin'),
+    limbRow('Torso centre to shoulder', 'centreShoulder'), limbRow('Torso centre to hip', 'centreHip'),
     ['Sphere radii: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
     ['  from the arms (shoulder / + upper arm / + forearm)', `${fmt(k.radii.arm.small)} / ${fmt(k.radii.arm.medium)} / ${fmt(k.radii.arm.large)}`],
     ['  from the legs (hip / + thigh / + shin)', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
     ...KINESPHERE_CLASSES.map(c => [`Time in ${c.label.toLowerCase()} kinesphere`, fmtPct(k.shares[c.key], 1)]),
-  ]));
+  ].map(pad)));
 
   const b = a.body;
   const drawBody = () => {
@@ -1161,7 +1171,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
   const lr = left + right;
   const kc = F.kClass[i], lvl = F.level[i];
   const rows = [
-    ['Kinesphere', kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
+    [`Kinesphere ${a.kinesphere.mode === '3d' ? '3D' : '2D'}`, kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
     ['Space', lvl >= 0 ? SPACE_LEVELS[lvl].label : '–', '#fff'],
     ['Left / right', lr > 0 ? `${fmtPct(left / lr)} / ${fmtPct(right / lr)}` : '–', '#fff'],
     ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],

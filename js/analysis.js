@@ -3,11 +3,11 @@
 // (median distance between mid-shoulders and mid-hips over the recording), so a
 // "speed of 1" means one torso length per second regardless of camera distance.
 
-import { NUM_LANDMARKS, STRIDE } from './pose.js';
+import { NUM_LANDMARKS, STRIDE, WORLD_JOINTS, WORLD_SIZE } from './pose.js';
 import { clamp, mean, median, percentile, rng } from './util.js';
 
-/** The 13 "major" joints used for activity metrics, in this order. */
-export const MAJOR = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+/** The 13 "major" joints used for activity metrics, in this order (same as the stored world joints). */
+export const MAJOR = WORLD_JOINTS;
 /** Display names: 1 head, 2 shoulders, 2 elbows, 2 hands, 2 hips, 2 knees, 2 feet. */
 export const MAJOR_NAMES = ['Head', 'L shoulder', 'R shoulder', 'L elbow', 'R elbow', 'L hand', 'R hand',
   'L hip', 'R hip', 'L knee', 'R knee', 'L foot', 'R foot'];
@@ -262,6 +262,60 @@ export function analyze(session) {
     centreShoulder: pair(fromCentreP90(11), fromCentreP90(12)),
     centreHip: pair(fromCentreP90(23), fromCentreP90(24)),
   };
+  // ---- 3D (MediaPipe world landmarks): metric positions with depth, so limb lengths are true
+  // lengths (median, no foreshortening) and reaches towards the camera are measured properly.
+  const slotOf = k => MAJOR.indexOf(k);
+  let world3d = null;
+  if (session.world && session.world.length >= n * WORLD_SIZE) {
+    const Wd = session.world;
+    const present = new Uint8Array(n);
+    let presentCount = 0;
+    for (let i = 0; i < n; i++) {
+      const o = i * WORLD_SIZE;
+      let any = false;
+      for (let d = 0; d < WORLD_SIZE; d++) if (Wd[o + d] !== 0) { any = true; break; }
+      present[i] = valid[i] && any ? 1 : 0;
+      presentCount += present[i];
+    }
+    if (presentCount >= Math.max(10, 0.2 * validCount)) {
+      const WP = MAJOR.map((k, j) => [0, 1, 2].map(c => {
+        const arr = new Float32Array(n);
+        const mask = new Uint8Array(n);
+        for (let i = 0; i < n; i++) { arr[i] = Wd[i * WORLD_SIZE + j * 3 + c]; mask[i] = present[i] && visible(k, i) ? 1 : 0; }
+        return smoothFrames(arr, 2, mask);
+      }));
+      const p3 = (k, i) => { const j = slotOf(k); return [WP[j][0][i], WP[j][1][i], WP[j][2][i]]; };
+      const d3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      const mid3 = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+      const centre3 = i => mid3(mid3(p3(11, i), p3(12, i)), mid3(p3(23, i), p3(24, i)));
+      const torsos = [];
+      for (let i = 0; i < n; i++) if (present[i]) torsos.push(d3(mid3(p3(11, i), p3(12, i)), mid3(p3(23, i), p3(24, i))));
+      const T3 = median(torsos);
+      if (T3 > 0.05) {
+        const seg3 = (a, b) => {
+          const v = [];
+          for (let i = 0; i < n; i++) if (present[i] && visible(a, i) && visible(b, i)) v.push(d3(p3(a, i), p3(b, i)));
+          return median(v);
+        };
+        const fromCentre3 = k => {
+          const v = [];
+          for (let i = 0; i < n; i++) if (present[i] && visible(k, i)) v.push(d3(centre3(i), p3(k, i)));
+          return median(v);
+        };
+        const metres = {
+          upperArm: pair(seg3(11, 13), seg3(12, 14)),
+          forearm: pair(seg3(13, 15), seg3(14, 16)),
+          thigh: pair(seg3(23, 25), seg3(24, 26)),
+          shin: pair(seg3(25, 27), seg3(26, 28)),
+          centreShoulder: pair(fromCentre3(11), fromCentre3(12)),
+          centreHip: pair(fromCentre3(23), fromCentre3(24)),
+        };
+        for (const key of Object.keys(limbs)) limbs[key] = metres[key] / T3;
+        world3d = { present, p3, d3, centre3, T3, metres: { ...metres, torso: T3 } };
+      }
+    }
+  }
+
   // Fall back to typical proportions (in torso lengths) when a segment was never visible, and keep
   // estimates within plausible human proportions so a run of bad detections cannot inflate them.
   const typical = { upperArm: 0.6, forearm: 0.55, thigh: 0.9, shin: 0.85, centreShoulder: 0.64, centreHip: 0.54 };
@@ -319,12 +373,16 @@ export function analyze(session) {
       if (limb.kind === 'leg' && !gesturing(limb, i)) return; // supporting legs are not reach
       const R = radii.shared;
       const [, mid, end] = limb.pts;
+      // distance from the torso centre in torso lengths: 3D from world landmarks when available
+      const reach = k => (world3d?.present[i]
+        ? world3d.d3(world3d.centre3(i), world3d.p3(k, i)) / world3d.T3
+        : dist(w, pt(k, i)) / sc);
       let c = -1;
       if (visible(end, i)) {
-        const d = dist(w, pt(end, i)) / sc;
+        const d = reach(end);
         c = d <= R.small ? 0 : d <= R.medium ? 1 : 2;
       } else if (visible(mid, i)) {
-        c = dist(w, pt(mid, i)) / sc <= R.small ? 0 : 1;
+        c = reach(mid) <= R.small ? 0 : 1;
       }
       if (c > best) { best = c; bestLimb = li; }
     });
@@ -368,6 +426,9 @@ export function analyze(session) {
   const kinesphere = {
     shares: Object.fromEntries(KINESPHERE_CLASSES.map((c, k) => [c.key, shareOf(kClass, k)])),
     limbs, radii,
+    mode: world3d ? '3d' : '2d',
+    metres: world3d ? world3d.metres : null,
+    coverage3d: world3d ? world3d.present.reduce((a, b) => a + b, 0) / Math.max(1, validCount) : 0,
     poses: Object.fromEntries(KINESPHERE_CLASSES.map((c, k) => [c.key, typicalPose(classFrames[k])])),
     limbNames: LIMBS.map(l => l.name),
   };

@@ -146,6 +146,24 @@ export const STRIDE = 4;
 export const FRAME_SIZE = NUM_LANDMARKS * STRIDE;
 export const MAX_PEOPLE = 6;
 
+/**
+ * World landmarks (MediaPipe only): metric 3D positions in metres, origin at the hip midpoint.
+ * Only the 13 joints used by the analysis are kept, as [x, y, z] each, to limit storage.
+ */
+export const WORLD_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+export const WORLD_SIZE = WORLD_JOINTS.length * 3;
+
+export function flattenWorld(points) {
+  if (!points?.length) return null;
+  const out = new Float32Array(WORLD_SIZE);
+  WORLD_JOINTS.forEach((k, j) => {
+    const p = points[k];
+    if (!p) return;
+    out[j * 3] = p.x; out[j * 3 + 1] = p.y; out[j * 3 + 2] = p.z;
+  });
+  return out;
+}
+
 /** Hand landmarks (MediaPipe Holistic): 21 points per hand, left hand first then right. */
 export const HAND_LANDMARKS = 21;
 export const HAND_SIZE = 2 * HAND_LANDMARKS * STRIDE;
@@ -271,9 +289,10 @@ async function createMediaPipe(info, people, onStatus) {
   }
   return {
     delegate,
+    world: true,
     detect(video, timestampMs) {
       const result = landmarker.detectForVideo(video, timestampMs);
-      return (result?.landmarks ?? []).map(l => ({ lm: flattenLandmarks(l) }));
+      return (result?.landmarks ?? []).map((l, idx) => ({ lm: flattenLandmarks(l), world: flattenWorld(result.worldLandmarks?.[idx]) }));
     },
     close() { landmarker.close(); },
   };
@@ -339,6 +358,7 @@ async function createHolistic(info, onStatus) {
   return {
     delegate,
     hands: true,
+    world: true,
     faceContours: contours,
     detect(video, timestampMs) {
       const r = landmarker.detectForVideo(video, timestampMs);
@@ -347,7 +367,7 @@ async function createHolistic(info, onStatus) {
       const hands = new Float32Array(HAND_SIZE);
       flattenHand(r.leftHandLandmarks?.[0], hands, 0);
       flattenHand(r.rightHandLandmarks?.[0], hands, HAND_LANDMARKS * STRIDE);
-      return [{ lm: flattenLandmarks(pose), hands, face: r.faceLandmarks?.[0] ?? null }];
+      return [{ lm: flattenLandmarks(pose), world: flattenWorld(r.poseWorldLandmarks?.[0]), hands, face: r.faceLandmarks?.[0] ?? null }];
     },
     close() { landmarker.close(); },
   };
@@ -469,7 +489,7 @@ export async function createPoseDetector({ model = 'lite', people = 1, onStatus 
   const impl = info.engine === 'movenet' ? await createMoveNet(info, n, onStatus)
     : info.engine === 'holistic' ? await createHolistic(info, onStatus)
       : await createMediaPipe(info, n, onStatus);
-  return { id: info.id, model: info.id, engine: info.engine, label: info.label, people: n, hands: false, faceContours: [], ...impl };
+  return { id: info.id, model: info.id, engine: info.engine, label: info.label, people: n, hands: false, world: false, faceContours: [], ...impl };
 }
 
 /** Convert MediaPipe's landmark objects into a flat Float32Array [x,y,z,visibility]*33. */

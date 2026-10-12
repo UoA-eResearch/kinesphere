@@ -13,13 +13,16 @@
 // On disk / in localStorage it is JSON (format "kinesphere-session", version 3) with the
 // landmark positions packed as base64 int16 (x,y,z / 10000) and visibility as base64 uint8 (/255),
 // and optional handPositions / handVisibility packed the same way.
-// Version 1 (single person, no engine) and 2 (no hands) files are still read.
+// MediaPipe sessions (version 4+) also carry `world`: Float32Array (frameCount * people * 13 * 3),
+// metric 3D positions in metres (origin at the hip midpoint) for the 13 WORLD_JOINTS, packed as
+// base64 int16 (/ 10000) in worldPositions. A frame where the person was absent is all zeros.
+// Version 1 (single person, no engine), 2 (no hands) and 3 (no world landmarks) files are still read.
 // Only pose landmarks are ever stored - never video.
 
-import { LANDMARK_NAMES, NUM_LANDMARKS, STRIDE, FRAME_SIZE, HAND_LANDMARKS, HAND_SIZE } from './pose.js';
+import { LANDMARK_NAMES, NUM_LANDMARKS, STRIDE, FRAME_SIZE, HAND_LANDMARKS, HAND_SIZE, WORLD_JOINTS, WORLD_SIZE } from './pose.js';
 
 export const FORMAT = 'kinesphere-session';
-export const VERSION = 3;
+export const VERSION = 4;
 const POS_SCALE = 10000;
 const INDEX_KEY = 'kinesphere:sessions';
 const keyFor = id => `kinesphere:session:${id}`;
@@ -47,10 +50,13 @@ export function buildSession({ frames, width, height, model, engine, people = 1,
   const withHands = frames.some(f => f.hands);
   const handStride = people * HAND_SIZE;
   const hands = withHands ? new Float32Array(n * handStride) : null;
+  const worldStride = people * WORLD_SIZE;
+  const world = frames.some(f => f.world) ? new Float32Array(n * worldStride) : null;
   frames.forEach((f, i) => {
     times[i] = f.t;
     lm.set(f.lm.subarray(0, stride), i * stride);
     if (hands && f.hands) hands.set(f.hands.subarray(0, handStride), i * handStride);
+    if (world && f.world) world.set(f.world.subarray(0, worldStride), i * worldStride);
   });
   const started = new Date(startedAt ?? Date.now());
   return {
@@ -65,8 +71,13 @@ export function buildSession({ frames, width, height, model, engine, people = 1,
     people,
     trigger: trigger ?? 'button',
     frameCount: n,
-    times, lm, hands,
+    times, lm, hands, world,
   };
+}
+
+/** Offset into session.world of frame `i`, person `p`. */
+export function worldOffset(session, i, p = 0) {
+  return (i * (session.people || 1) + p) * WORLD_SIZE;
 }
 
 /** Offset into session.hands of frame `i`, person `p`. */
@@ -92,6 +103,7 @@ export function personView(session, slot) {
   const n = session.frameCount;
   const lm = new Float32Array(n * FRAME_SIZE);
   const hands = session.hands ? new Float32Array(n * HAND_SIZE) : null;
+  const world = session.world ? new Float32Array(n * WORLD_SIZE) : null;
   for (let i = 0; i < n; i++) {
     const o = (i * people + slot) * FRAME_SIZE;
     lm.set(session.lm.subarray(o, o + FRAME_SIZE), i * FRAME_SIZE);
@@ -99,8 +111,12 @@ export function personView(session, slot) {
       const ho = (i * people + slot) * HAND_SIZE;
       hands.set(session.hands.subarray(ho, ho + HAND_SIZE), i * HAND_SIZE);
     }
+    if (world) {
+      const wo = (i * people + slot) * WORLD_SIZE;
+      world.set(session.world.subarray(wo, wo + WORLD_SIZE), i * WORLD_SIZE);
+    }
   }
-  return { ...session, people: 1, lm, hands };
+  return { ...session, people: 1, lm, hands, world };
 }
 
 // ---- base64 helpers ------------------------------------------------------------------
@@ -157,6 +173,21 @@ function unpackTrack(positionsB64, visibilityB64, total, what) {
   return out;
 }
 
+/** Pack [x, y, z]* (no visibility) as base64 little-endian int16 / POS_SCALE. */
+function packXYZ(arr) {
+  const pos = new DataView(new ArrayBuffer(arr.length * 2));
+  for (let i = 0; i < arr.length; i++) pos.setInt16(i * 2, Math.max(-32768, Math.min(32767, Math.round(arr[i] * POS_SCALE))), true);
+  return bytesToB64(new Uint8Array(pos.buffer));
+}
+function unpackXYZ(b64, count, what) {
+  const bytes = b64ToBytes(b64);
+  if (bytes.length !== count * 2) throw new Error(`Corrupt session: ${what} data length mismatch`);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) out[i] = view.getInt16(i * 2, true) / POS_SCALE;
+  return out;
+}
+
 export function serialize(session) {
   const n = session.frameCount;
   const people = session.people || 1;
@@ -179,24 +210,27 @@ export function serialize(session) {
     frameCount: n,
     landmarkNames: LANDMARK_NAMES,
     handLandmarks: hands ? HAND_LANDMARKS : 0,
+    worldJoints: session.world ? WORLD_JOINTS : [],
     encoding: {
       times: 'milliseconds since the start of the recording, one per frame',
       positions: 'base64 of little-endian int16 triples [x, y, z] per landmark, ordered frame -> person -> landmark; divide by 10000 to get MediaPipe normalised image coordinates',
       visibility: 'base64 of uint8, one per landmark in the same order; divide by 255. A person with visibility 0 everywhere was not detected in that frame',
       movenet: 'when engine is "movenet" only the 17 COCO joints are filled (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles); z is always 0',
       hands: 'when present (MediaPipe Holistic), handPositions/handVisibility hold 42 landmarks per person per frame: the left hand (21 points, MediaPipe hand order) then the right hand, packed like positions/visibility; a hand with visibility 0 was not detected',
+      world: 'when present (MediaPipe), worldPositions holds metric 3D positions in metres (origin at the hip midpoint) for the landmarks listed in worldJoints, as little-endian int16 triples [x, y, z] ordered frame -> person -> joint; divide by 10000. Visibility is the same as the matching landmark in positions; all zeros means not detected',
     },
     times: Array.from(session.times, t => Math.round(t)),
     positions: body.positions,
     visibility: body.visibility,
     ...(hands ? { handPositions: hands.positions, handVisibility: hands.visibility } : {}),
+    ...(session.world ? { worldPositions: packXYZ(session.world) } : {}),
   });
 }
 
 export function deserialize(text) {
   const j = typeof text === 'string' ? JSON.parse(text) : text;
   if (!j || j.format !== FORMAT) throw new Error('Not a Kinesphere session file');
-  if (![1, 2, VERSION].includes(j.version)) throw new Error(`Unsupported session version ${j.version}`);
+  if (![1, 2, 3, VERSION].includes(j.version)) throw new Error(`Unsupported session version ${j.version}`);
   const n = j.frameCount | 0;
   const people = Math.max(1, j.people | 0 || 1);
   if (!Array.isArray(j.times) || j.times.length !== n) throw new Error('Corrupt session: times');
@@ -204,6 +238,7 @@ export function deserialize(text) {
   const hands = j.handPositions && j.handVisibility
     ? unpackTrack(j.handPositions, j.handVisibility, n * people * 2 * HAND_LANDMARKS, 'hand')
     : null;
+  const world = j.worldPositions ? unpackXYZ(j.worldPositions, n * people * WORLD_SIZE, 'world landmark') : null;
   return {
     id: String(j.id || makeId()),
     name: String(j.name || defaultName(new Date(j.createdAt || Date.now()))),
@@ -218,7 +253,7 @@ export function deserialize(text) {
     trigger: j.trigger || 'unknown',
     frameCount: n,
     times: Float64Array.from(j.times),
-    lm, hands,
+    lm, hands, world,
   };
 }
 
@@ -239,7 +274,7 @@ function metaOf(session, bytes) {
   return {
     id: session.id, name: session.name, createdAt: session.createdAt,
     durationMs: session.durationMs, frameCount: session.frameCount, bytes,
-    people: session.people || 1, engine: session.engine || 'mediapipe', model: session.model, hands: Boolean(session.hands),
+    people: session.people || 1, engine: session.engine || 'mediapipe', model: session.model, hands: Boolean(session.hands), world: Boolean(session.world),
   };
 }
 
@@ -305,8 +340,11 @@ export function toCSV(session) {
       for (let k = 0; k < HAND_LANDMARKS; k++) header.push(`${side}_${k}_x`, `${side}_${k}_y`, `${side}_${k}_z`, `${side}_${k}_visibility`);
     }
   }
+  if (session.world) {
+    for (const k of WORLD_JOINTS) header.push(`${LANDMARK_NAMES[k]}_world_x_m`, `${LANDMARK_NAMES[k]}_world_y_m`, `${LANDMARK_NAMES[k]}_world_z_m`);
+  }
   const rows = [header.join(',')];
-  const { lm, hands, times, frameCount } = session;
+  const { lm, hands, world, times, frameCount } = session;
   for (let i = 0; i < frameCount; i++) {
     for (let p = 0; p < people; p++) {
       const base = frameOffset(session, i, p);
@@ -316,6 +354,10 @@ export function toCSV(session) {
       if (hands) {
         const hb = handOffset(session, i, p);
         for (let j = 0; j < HAND_SIZE; j++) cells.push(hands[hb + j].toFixed(4));
+      }
+      if (world) {
+        const wb = worldOffset(session, i, p);
+        for (let j = 0; j < WORLD_SIZE; j++) cells.push(world[wb + j].toFixed(4));
       }
       rows.push(cells.join(','));
     }

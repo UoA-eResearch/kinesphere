@@ -98,7 +98,7 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
 | --- | --- |
 | **Replay** | The recorded skeleton(s), with a scrubber. Moving it also moves the cursor on the time charts. **Metrics overlay** draws the kinesphere spheres around the centre of the torso (the same spheres throughout; the one reached is highlighted), the standing shoulder and knee lines with the current space level shaded, markers sized by each body part's current speed, and a readout of the current kinesphere size and limb, space level, left/right split over the last second and most active body part. Useful for understanding the dashboard and for checking the classifiers. |
 | **Person tabs** | When several people were tracked, one tab per person (coloured like the overlay) switches every metric below, and the overlay, to that dancer. |
-| **Kinesphere** | Share of time in a small, medium or large kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton (the 90th percentile of each segment's on-screen length over the session): **small** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **large** at the hands when outstretched (+ forearm). Legs give the same three distances from the hip, knee and ankle; arms and legs share one set of spheres, each the further of the two, so the spheres stay fixed for the whole session. Each frame takes the largest sphere any limb's hand or foot reaches into (inside the small sphere = small, between small and medium = medium, beyond medium = large); a leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24). "Show limb lengths and sphere sizes" lists every estimate. |
+| **Kinesphere** | Share of time in a small, medium or large kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton. With MediaPipe models the kinesphere is measured in **3D** from MediaPipe's world landmarks (metric positions in metres): limb lengths are each segment's median 3D length (also shown in cm) and reaches towards or away from the camera count fully. MoveNet sessions and recordings made before 3D support fall back to 2D screen positions, where limb lengths are the 90th percentile of each segment's on-screen length and reaches towards the camera are under-counted. The panel says which mode a session used. Spheres: **small** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **large** at the hands when outstretched (+ forearm). Legs give the same three distances from the hip, knee and ankle; arms and legs share one set of spheres, each the further of the two, so the spheres stay fixed for the whole session. Each frame takes the largest sphere any limb's hand or foot reaches into (inside the small sphere = small, between small and medium = medium, beyond medium = large); a leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24). "Show limb lengths and sphere sizes" lists every estimate. |
 | **Body** | **Body part activity**: 13 markers (head, shoulders, elbows, hands, hips, knees, feet) sized and coloured by each part's share of all movement; *Show values* prints the percentages on the figure, and "Show body part data" lists share of movement, active time (share of the session the part moved faster than 0.5 torso lengths/s) and mean speed. **Left / right**: the figure split down the middle with each side's share of movement (head excluded). **Where was the activity?**: share of time at a high, medium or low level. This is about position, not which limb moved: *high* when at least one limb is above standing shoulder height, *low* when a hand or the hips are below standing knee height, *medium* otherwise; the head is not counted, standing legs are ignored, and standing heights are measured from the session with the lowest visible joint taken as the floor. |
 | **Speed** | Mean joint speed over time, in torso lengths per second (smoothed over 1 s), with the mean and peak. |
 | **Path through the frame** | The path of the hips through the camera frame, coloured from start to end, over shaded cells showing where you spent the most time. Coverage is the 2nd–98th percentile spread of the hip position; path length is the distance the hips travelled. |
@@ -114,7 +114,7 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
   depending on which models you have used. Clear them from the **?** help panel or by clearing
   the site's data.
 * Sessions live in `localStorage` under keys starting with `kinesphere:`. Browsers allow about
-  5 MB per site, which is roughly 6–8 minutes of recording at 30 frames per second. When the
+  5 MB per site, which is about 3 minutes of MediaPipe recording at 30 frames per second (about 4.5 minutes for MoveNet sessions, which have no 3D world landmarks). When the
   quota is exceeded the dashboard still shows, with a warning that the session was not saved;
   export it to a file or delete older sessions to make room.
 * Only landmarks are recorded, at up to 30 frames per second. The stored frame rate is limited by
@@ -127,7 +127,7 @@ An exported session is JSON:
 ```jsonc
 {
   "format": "kinesphere-session",
-  "version": 3,
+  "version": 4,
   "id": "…", "name": "…", "createdAt": "2026-09-02T10:00:00.000Z",
   "durationMs": 220000, "width": 1280, "height": 720,
   "mirrored": true,              // the preview was mirrored; landmarks are in raw camera coordinates
@@ -137,6 +137,9 @@ An exported session is JSON:
   "times": [0, 33, 66, …],       // ms since the start of the recording, one per frame
   "positions": "base64…",        // little-endian int16 [x, y, z] per landmark, ordered frame → person → landmark; divide by 10000
   "visibility": "base64…",       // uint8 per landmark in the same order; divide by 255
+  "worldJoints": [0, 11, 12, …], // MediaPipe sessions only, with:
+  "worldPositions": "base64…",   //   metric 3D [x, y, z] in metres (origin at the hip midpoint) for those 13 joints,
+                                 //   little-endian int16 per value, frame → person → joint; divide by 10000
   "handLandmarks": 21,           // Holistic sessions only, with:
   "handPositions": "base64…",    //   42 landmarks per person per frame (left hand, then right), packed like positions
   "handVisibility": "base64…"    //   1 = hand detected, 0 = not detected
@@ -147,7 +150,10 @@ An exported session is JSON:
 person who was not detected in a frame has visibility 0 for every landmark. `engine` is
 `mediapipe`, `holistic` or `movenet`; MoveNet files fill only the 17 matching landmark slots and
 always have `z = 0`. Holistic files add the hand tracks above (the face mesh is never stored).
-Version 1 (single person, no `engine`/`people`) and version 2 (no hands) files are still imported.
+World landmarks are stored for the 13 analysed joints only (head, shoulders, elbows, wrists, hips,
+knees, ankles), which adds about a third to a session's size. Version 1 (single person, no
+`engine`/`people`), version 2 (no hands) and version 3 (no world landmarks) files are still
+imported; they are analysed in 2D.
 
 `x` and `y` are MediaPipe's normalised image coordinates (0–1 across the frame, y down);
 `z` is depth relative to the hips in roughly the same scale as `x`. Decoding in Python:
@@ -163,7 +169,8 @@ vis = np.frombuffer(base64.b64decode(s["visibility"]), "u1").reshape(s["frameCou
 The CSV export contains the same data with one row per frame and columns
 `t_ms, nose_x, nose_y, nose_z, nose_visibility, left_eye_inner_x, …`. For multi-person sessions
 a leading `person` column (1-based) is added and there is one row per frame per detected person.
-Holistic sessions append `left_hand_0_x … right_hand_20_visibility` columns.
+Holistic sessions append `left_hand_0_x … right_hand_20_visibility` columns, and MediaPipe sessions
+append `nose_world_x_m … right_ankle_world_z_m` columns with the world landmarks in metres.
 
 ## Development
 
