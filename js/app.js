@@ -954,8 +954,8 @@ function dashboardCards(a) {
         ${k.metres ? stat('Arm length', ((k.metres.upperArm + k.metres.forearm) * 100).toFixed(0), 'cm, shoulder to wrist') : stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the torso centre')}
       </div>
       <div id="kine-table"></div>
-      <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (shoulders and hips). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows and knees) when outstretched. <b>Large</b>: the sphere at the distance of the hands and feet when outstretched.
-        Arms and legs share the same three spheres (each the further of the arm and leg distance), so the spheres stay fixed during the session. Each frame is classified by the furthest sphere any limb reaches into; legs only count while lifted (a standing leg is support, not reach). Each figure above is the most typical pose in that class.
+      <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (the shoulders). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows) when the arm is outstretched. <b>Large</b>: the sphere at the distance of the hands when outstretched.
+        The spheres are sized from the arms and stay fixed during the session; lifted legs are compared with the same spheres (a standing leg is support, not reach). Each hand or foot is classed by the sphere it is nearest to, and the frame takes the largest of those, so relaxed arms hanging at the sides count as small. Each figure above is the most typical pose in that class.
         ${k.mode === '3d'
           ? 'Limb lengths are the median 3D length of each segment from MediaPipe\'s world landmarks (metric, in metres); distances are in torso lengths. The replay overlay draws the spheres as circles on screen, so a hand reaching towards the camera can be in the large sphere while it looks inside the circle.'
           : 'Limb lengths are the 90th percentile of each segment\'s length on screen, so reaching straight towards or away from the camera is under-counted.'}</p>
@@ -1045,9 +1045,8 @@ function mountCharts(a, session, root) {
     limbRow('Upper arm (shoulder to elbow)', 'upperArm'), limbRow('Forearm (elbow to wrist)', 'forearm'),
     limbRow('Thigh (hip to knee)', 'thigh'), limbRow('Shin (knee to ankle)', 'shin'),
     limbRow('Torso centre to shoulder', 'centreShoulder'), limbRow('Torso centre to hip', 'centreHip'),
-    ['Sphere radii: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
-    ['  from the arms (shoulder / + upper arm / + forearm)', `${fmt(k.radii.arm.small)} / ${fmt(k.radii.arm.medium)} / ${fmt(k.radii.arm.large)}`],
-    ['  from the legs (hip / + thigh / + shin)', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
+    ['Sphere radii: small / medium / large (shoulder / + upper arm / + forearm)', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
+    ['Class boundaries (halfway between spheres)', `${fmt((R.small + R.medium) / 2)} / ${fmt((R.medium + R.large) / 2)}`],
     ...KINESPHERE_CLASSES.map(c => [`Time in ${c.label.toLowerCase()} kinesphere`, fmtPct(k.shares[c.key], 1)]),
   ].map(pad)));
 

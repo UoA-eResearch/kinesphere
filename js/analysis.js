@@ -325,9 +325,10 @@ export function analyze(session) {
   }
   const arm = { small: limbs.centreShoulder, medium: limbs.centreShoulder + limbs.upperArm, large: limbs.centreShoulder + limbs.upperArm + limbs.forearm };
   const leg = { small: limbs.centreHip, medium: limbs.centreHip + limbs.thigh, large: limbs.centreHip + limbs.thigh + limbs.shin };
-  // One set of concentric spheres for every limb: each level is the further of the arm and leg
-  // distance (small = proximal joints, medium = elbows/knees, large = hands/feet outstretched).
-  const shared = { small: Math.max(arm.small, leg.small), medium: Math.max(arm.medium, leg.medium), large: Math.max(arm.large, leg.large) };
+  // One set of concentric spheres for every limb, sized from the arms (the reaching limbs):
+  // small = shoulders, medium = elbows outstretched, large = hands outstretched. Legs measured from
+  // the torso centre are longer than arms, so leg-sized spheres would put large out of the arms' reach.
+  const shared = { ...arm };
   const radii = { arm, leg, shared };
 
   // ---- Floor and standing heights. The floor can only be measured when a foot (ankle, heel or
@@ -389,12 +390,14 @@ export function analyze(session) {
       const reach = k => (world3d?.present[i]
         ? world3d.d3(world3d.centre3(i), world3d.p3(k, i)) / world3d.T3
         : dist(w, pt(k, i)) / sc);
+      // nearest sphere: the class boundaries are halfway between neighbouring spheres
+      const b1 = (R.small + R.medium) / 2, b2 = (R.medium + R.large) / 2;
       let c = -1;
       if (visible(end, i)) {
         const d = reach(end);
-        c = d <= R.small ? 0 : d <= R.medium ? 1 : 2;
+        c = d < b1 ? 0 : d < b2 ? 1 : 2;
       } else if (visible(mid, i)) {
-        c = reach(mid) <= R.small ? 0 : 1;
+        c = reach(mid) < b1 ? 0 : 1;
       }
       if (c > best) { best = c; bestLimb = li; }
     });
