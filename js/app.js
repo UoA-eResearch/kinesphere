@@ -947,11 +947,11 @@ function dashboardCards(a) {
       <div id="kine-bar"></div>
       <div class="stat-row">
         ${stat('Pose tracked', fmtPct(a.validFraction), 'of frames')}
-        ${stat('Arm reach', k.radii.arm.large.toFixed(2), 'torso lengths from the waist')}
+        ${stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the waist')}
       </div>
       <div id="kine-table"></div>
       <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (shoulders and hips). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows and knees) when outstretched. <b>Large</b>: the sphere at the distance of the hands and feet when outstretched.
-        Each frame is classified by the furthest sphere any limb reaches into; legs only count while lifted (a standing leg is support, not reach). Each figure above is the most typical pose in that class.
+        Arms and legs share the same three spheres (each the further of the arm and leg distance), so the spheres stay fixed during the session. Each frame is classified by the furthest sphere any limb reaches into; legs only count while lifted (a standing leg is support, not reach). Each figure above is the most typical pose in that class.
         Limb lengths are the 90th percentile of each segment's length on screen, so reaching straight towards or away from the camera is under-counted.</p>
     </section>
 
@@ -1022,7 +1022,7 @@ function mountCharts(a, session, root) {
   stackedBar(root.querySelector('#kine-bar'), KINESPHERE_CLASSES.map((c, i) => ({
     label: c.label, value: k.shares[c.key], fill: ord[i].fill, ink: ord[i].ink,
   })));
-  const R = k.radii.arm;
+  const R = k.radii.shared;
   KINESPHERE_CLASSES.forEach((c, ci) => {
     bodyFigure(root.querySelector(`#kine-fig-${c.key}`), {
       pose: k.poses[c.key] ?? TEMPLATE_POSE, showSides: false,
@@ -1034,8 +1034,9 @@ function mountCharts(a, session, root) {
     ['Upper arm (shoulder to elbow)', fmt(L.upperArm)], ['Forearm (elbow to wrist)', fmt(L.forearm)],
     ['Thigh (hip to knee)', fmt(L.thigh)], ['Shin (knee to ankle)', fmt(L.shin)],
     ['Waist to shoulder', fmt(L.waistShoulder)], ['Waist to hip', fmt(L.waistHip)],
-    ['Arm spheres: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
-    ['Leg spheres: small / medium / large', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
+    ['Sphere radii: small / medium / large', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
+    ['  from the arms (shoulder / + upper arm / + forearm)', `${fmt(k.radii.arm.small)} / ${fmt(k.radii.arm.medium)} / ${fmt(k.radii.arm.large)}`],
+    ['  from the legs (hip / + thigh / + shin)', `${fmt(k.radii.leg.small)} / ${fmt(k.radii.leg.medium)} / ${fmt(k.radii.leg.large)}`],
     ...KINESPHERE_CLASSES.map(c => [`Time in ${c.label.toLowerCase()} kinesphere`, fmtPct(k.shares[c.key], 1)]),
   ]));
 
@@ -1120,9 +1121,8 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
     ctx.setLineDash([]);
     // Kinesphere spheres around the waist.
     const wx = X((lm[23 * 4] + lm[24 * 4]) / 2), wy = (lm[23 * 4 + 1] + lm[24 * 4 + 1]) / 2 * h;
-    // draw the spheres of the limb that set the class (legs have their own, longer spheres)
-    const kc = F.kClass[i], limbIdx = F.kLimb[i];
-    const R = a.kinesphere.radii[limbIdx >= 2 ? 'leg' : 'arm'];
+    const kc = F.kClass[i];
+    const R = a.kinesphere.radii.shared; // the same spheres in every frame
     [R.small, R.medium, R.large].forEach((r, ri) => {
       ctx.beginPath();
       ctx.arc(wx, wy, r * sc * h, 0, Math.PI * 2);

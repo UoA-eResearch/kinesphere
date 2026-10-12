@@ -268,10 +268,12 @@ export function analyze(session) {
   for (const key of Object.keys(limbs)) {
     limbs[key] = limbs[key] > 0 ? clamp(limbs[key], ...plausible[key]) : typical[key];
   }
-  const radii = {
-    arm: { small: limbs.waistShoulder, medium: limbs.waistShoulder + limbs.upperArm, large: limbs.waistShoulder + limbs.upperArm + limbs.forearm },
-    leg: { small: limbs.waistHip, medium: limbs.waistHip + limbs.thigh, large: limbs.waistHip + limbs.thigh + limbs.shin },
-  };
+  const arm = { small: limbs.waistShoulder, medium: limbs.waistShoulder + limbs.upperArm, large: limbs.waistShoulder + limbs.upperArm + limbs.forearm };
+  const leg = { small: limbs.waistHip, medium: limbs.waistHip + limbs.thigh, large: limbs.waistHip + limbs.thigh + limbs.shin };
+  // One set of concentric spheres for every limb: each level is the further of the arm and leg
+  // distance (small = proximal joints, medium = elbows/knees, large = hands/feet outstretched).
+  const shared = { small: Math.max(arm.small, leg.small), medium: Math.max(arm.medium, leg.medium), large: Math.max(arm.large, leg.large) };
+  const radii = { arm, leg, shared };
 
   // ---- Floor and standing heights. The floor in each frame is the lowest visible joint (the body
   // always touches the floor somewhere, except mid-jump); heights are in torso units above it.
@@ -314,7 +316,7 @@ export function analyze(session) {
     let best = -1, bestLimb = -1;
     LIMBS.forEach((limb, li) => {
       if (limb.kind === 'leg' && !gesturing(limb, i)) return; // supporting legs are not reach
-      const R = radii[limb.kind];
+      const R = radii.shared;
       const [, mid, end] = limb.pts;
       let c = -1;
       if (visible(end, i)) {
