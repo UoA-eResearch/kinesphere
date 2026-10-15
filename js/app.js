@@ -13,6 +13,7 @@ import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } f
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
+import { createGame } from './game.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -113,13 +114,26 @@ function onLoadStatus(msg, progress = null) {
 }
 
 function setView(name) {
+  // The game is played on the live stage, so it is the live view with the game layer open.
+  const view = name === 'game' ? 'live' : name;
   // The camera stage may be fullscreen; leaving it in the top layer over a hidden view
   // would block every click on the dashboard, so always drop out of fullscreen first.
-  if (name !== 'live' && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-  state.view = name;
-  for (const [k, el] of Object.entries(ui.views)) el.hidden = k !== name;
+  if (view !== 'live' && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  state.view = view;
+  for (const [k, el] of Object.entries(ui.views)) el.hidden = k !== view;
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('is-active', b.dataset.view === name));
   hideTip();
+  if (name === 'game') {
+    state.countdown = null;
+    ui.countdown.hidden = true;
+    if (state.hold) { state.hold = null; ui.hold.hidden = true; }
+    if (state.recording && stopRecording(null, { navigate: false })) toast('Your recording was saved to Sessions.');
+    ui.views.live.classList.add('in-game');
+    game.open();
+  } else {
+    ui.views.live.classList.remove('in-game');
+    game.close();
+  }
   if (name === 'sessions') renderSessions();
   if (name === 'live' && state.stream) startLoop();
   window.scrollTo({ top: 0 });
@@ -207,6 +221,7 @@ function onSettingsChanged() {
 function showCameraError(msg) {
   ui.cameraError.textContent = msg;
   ui.cameraError.hidden = false;
+  if (game.isOpen) toast(msg, 8000); // the game covers the intro panel that shows the error
 }
 
 function withTimeout(promise, ms, message) {
@@ -351,6 +366,7 @@ async function startCamera() {
   ui.live3dBar.hidden = false;
   wireXrButtons(ui.btnLiveVr, ui.btnLiveAr, ui.liveVrNote, ensureLiveViewer);
   startLoop();
+  game.refresh();
 }
 
 /** Show or hide the camera feed. The stream keeps running so detection and recording continue. */
@@ -606,7 +622,8 @@ function renderOverlay(now) {
     effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours });
   });
   if (slots && state.detector.people > 1) {
-    slots.forEach((pose, p) => { if (pose) drawPersonBadge(overlayCtx, pose.lm, 0, width, height, p, { mirrorText: state.mirrored, minVis }); });
+    const mirrorText = state.mirrored || game.isPlaying; // the game always shows the player mirrored
+    slots.forEach((pose, p) => { if (pose) drawPersonBadge(overlayCtx, pose.lm, 0, width, height, p, { mirrorText, minVis }); });
   }
 }
 
@@ -652,7 +669,8 @@ function onDetection(slots, now) {
     ui.recTime.textContent = fmtClock(now - rec.startedAt);
   }
 
-  updateGesture(present, now);
+  if (game.isOpen) game.onPoses(slots, now, (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
+  else updateGesture(present, now);
   updateStatus(present.length);
   if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
 }
@@ -711,10 +729,14 @@ function startRecording(trigger, now = performance.now()) {
   ui.selCamera.disabled = true;
 }
 
-/** Stop recording. `trimBeforeT` drops frames from that time on (used to cut the stop gesture). */
-function stopRecording(trimBeforeT = null) {
+/**
+ * Stop recording. `trimBeforeT` drops frames from that time on (used to cut the stop gesture).
+ * Normally the new session is saved and opened in the dashboard; with `navigate: false` (the game)
+ * it is saved and returned instead, and with `discard: true` it is dropped.
+ */
+function stopRecording(trimBeforeT = null, { navigate = true, discard = false, name = null } = {}) {
   const rec = state.recording;
-  if (!rec) return;
+  if (!rec) return null;
   state.recording = null;
   ui.stage.classList.remove('is-recording');
   ui.recBadge.hidden = true;
@@ -727,9 +749,10 @@ function stopRecording(trimBeforeT = null) {
   syncSettingsUI();
   let frames = rec.frames;
   if (trimBeforeT != null) frames = frames.filter(f => f.t < trimBeforeT);
+  if (discard) return null;
   if (frames.length < 10) {
     toast('The recording was too short to analyse, so nothing was saved.');
-    return;
+    return null;
   }
   const session = buildSession({
     frames,
@@ -742,7 +765,16 @@ function stopRecording(trimBeforeT = null) {
     startedAt: rec.wallStart,
     mirrored: state.mirrored,
   });
-  openSession(session, { save: true });
+  if (name) session.name = `${name} · ${session.name}`;
+  if (navigate) { openSession(session, { save: true }); return session; }
+  try {
+    store.save(session);
+    updateSessionCount();
+  } catch (err) {
+    if (!(err instanceof StorageFullError)) throw err;
+    toast(err.message, 8000);
+  }
+  return session;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -813,7 +845,7 @@ function renderDashboard() {
 
   const people = session.people || 1;
   const fpsText = a.ok ? ` · ${a.fps.toFixed(0)} fps` : '';
-  const triggerText = session.trigger === 'pose' ? 'started by pose' : session.trigger === 'button' ? 'started by button' : '';
+  const triggerText = { pose: 'started by pose', button: 'started by button', game: 'danced in the game' }[session.trigger] ?? '';
   const tabs = people > 1 ? `
     <div class="person-tabs" role="tablist" aria-label="Person">
       ${analyses.map((an, p) => `<button class="tab${p === person ? ' is-active' : ''}" role="tab" data-person="${p}" aria-selected="${p === person}">
@@ -1470,11 +1502,12 @@ function init() {
     if (state.view !== 'live' || e.ctrlKey || e.metaKey || e.altKey) return;
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (e.code === 'KeyF' && state.stream) { e.preventDefault(); toggleFullscreen(); return; }
+    if (game.isOpen && e.code === 'Escape' && !document.fullscreenElement) { e.preventDefault(); game.back(); return; }
+    if (e.code === 'KeyF' && (state.stream || game.isOpen)) { e.preventDefault(); toggleFullscreen(); return; }
     if (e.code === 'KeyO') { e.preventDefault(); setOverlay(!state.showOverlay); return; }
     if (e.code === 'KeyS') { e.preventDefault(); nextStyle(); return; }
     if (e.code === 'KeyV') { e.preventDefault(); setVideo(!state.showVideo); return; }
-    if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector) return;
+    if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector || game.isOpen) return;
     e.preventDefault();
     if (state.recording) stopRecording();
     else startRecording('button');
@@ -1490,5 +1523,17 @@ function init() {
   }
   updateSessionCount();
 }
+
+const game = createGame({
+  stage: ui.stage, video: ui.video, overlay: ui.canvas,
+  isReady: () => Boolean(state.stream && state.detector),
+  players: () => state.detector?.people ?? 1,
+  startCamera,
+  startRecording: () => startRecording('game'),
+  stopRecording: ({ discard = false, name = null } = {}) => stopRecording(null, { navigate: false, discard, name }),
+  openDashboard: session => openSession(session, { save: true }),
+  toggleFullscreen,
+  onClose: () => setView('live'),
+});
 
 init();

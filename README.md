@@ -5,7 +5,7 @@ A browser app that watches you dance through your webcam, tracks your body with
 (or, optionally, [MoveNet](https://www.tensorflow.org/hub/tutorials/movenet) via TensorFlow.js),
 and turns a recorded session into a dashboard of movement metrics: how big your kinesphere was,
 where in the body the activity was concentrated, how fast you moved over time, and how you moved
-around the frame.
+around the frame. A Just Dance-style **game mode** scores you against an animated coach.
 
 Everything runs in the browser. Video never leaves your device and is never stored; only the
 detected pose landmarks are recorded. Sessions are persisted in the browser's `localStorage`
@@ -87,6 +87,46 @@ over passthrough where the browser supports `immersive-ar`. A controller trigger
 in the replay. The buttons only appear when the browser reports headset support; everything else
 in the app works without VR. three.js is loaded from the CDN the first time a 3D view is opened.
 
+### Game mode
+
+The **Game** tab turns the camera preview into a dance game in the spirit of Just Dance. Pick a
+song, follow the glowing coach, and every move is scored on its beat.
+
+* **Songs.** Three original tracks, synthesised live in the browser with the Web Audio API (no
+  audio files are downloaded), each with its own routine:
+
+  | Song | Tempo | Moves | Notes |
+  | --- | --- | --- | --- |
+  | Sunrise Warm-up (easy) | 96 BPM, one move per bar | 24 | Arms only |
+  | Neon Nights (medium) | 116 BPM, a move every 2 beats | 64 | Disco points, egypt arms, knee lifts |
+  | Kinesphere Rush (hard) | 128 BPM, a move every 2 beats | 64 | Kicks, squats and stars; keep your legs in view |
+
+  A one-bar count-in (3, 2, 1, Dance!) starts every song.
+* **Screen.**
+  * The coach, a neon stick figure, is on the left and turns gold for gold moves.
+  * You are shown in a mirrored picture-in-picture whose frame glows with how well you match right now.
+  * Pictograms of the next moves scroll along the bottom lane into the target box, where each rating pops up.
+  * The score, combo and a five-star meter are shown around them.
+* **Follow the coach like a mirror.** Move the arm on the same side of the screen as the coach's.
+  You are always matched as a mirror image, whatever the *Mirror view* setting.
+* **Scoring.**
+  * Each move compares the direction of your upper arms, forearms, thighs and shins with the coach's.
+    Arms count most; legs count less and only when they are in view.
+  * Your best match within a short window around the beat earns **Perfect** (100 points),
+    **Super** (70), **Good** (45), **OK** (20) or **X** (0).
+  * The window runs from 0.4 s before the beat to 0.3 s after, and the scoring allows about 0.1 s
+    for camera and model latency.
+  * Gold moves score double. Perfect, Super and Good build a combo.
+  * Stars come at 20, 35, 50, 65 and 80% of the song's maximum score, and Superstar at 90%.
+* **Groups.** With *People* set above 1, everyone tracked is scored separately and the results
+  show one card per player, coloured like the overlay.
+* **Best scores** are kept per song in this browser. The music volume and the
+  **Record my dance for the dashboard** option are in the song menu. When recording is on, the
+  dance is saved to *Sessions* when the song ends, named after the song, and can be opened in the
+  dashboard from the results screen. A stopped song is not saved.
+* **Controls.** <kbd>Esc</kbd> or ✕ stops the song, or goes back to the song list. ✕ on the song
+  list leaves the game. <kbd>F</kbd> or ⛶ toggles fullscreen.
+
 ## The dashboard
 
 All distances are divided by the dancer's torso length (median distance from mid-shoulders to
@@ -113,6 +153,8 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
   are stored in the browser's Cache Storage under `kinesphere-models-v1`, between 5 and 45 MB
   depending on which models you have used. Clear them from the **?** help panel or by clearing
   the site's data.
+* Game best scores and game settings are kept in `localStorage` too (`kinesphere:gameBest`,
+  `kinesphere:gameVolume`, `kinesphere:gameRecord`).
 * Sessions live in `localStorage` under keys starting with `kinesphere:`. Browsers allow about
   5 MB per site, which is about 3 minutes of MediaPipe recording at 30 frames per second (about 4.5 minutes for MoveNet sessions, which have no 3D world landmarks). When the
   quota is exceeded the dashboard still shows, with a warning that the session was not saved;
@@ -149,7 +191,8 @@ An exported session is JSON:
 `people` is the number of tracked slots per frame (1 unless several people were tracked); a
 person who was not detected in a frame has visibility 0 for every landmark. `engine` is
 `mediapipe`, `holistic` or `movenet`; MoveNet files fill only the 17 matching landmark slots and
-always have `z = 0`. Holistic files add the hand tracks above (the face mesh is never stored).
+always have `z = 0`. `trigger` says how the recording started: `button`, `pose` (the hands-up
+gesture) or `game` (recorded during a game song). Holistic files add the hand tracks above (the face mesh is never stored).
 World landmarks are stored for the 13 analysed joints only (head, shoulders, elbows, wrists, hips,
 knees, ankles), which adds about a third to a session's size. Version 1 (single person, no
 `engine`/`people`), version 2 (no hands) and version 3 (no world landmarks) files are still
@@ -193,6 +236,8 @@ js/pose.js        detection engines (MediaPipe, MoveNet), person tracker, skelet
 js/effects.js     overlay styles (skeleton, stick figure, neon, trails, sparks, constellation)
 js/smoothing.js   One Euro display smoothing for the overlay and replay
 js/viewer3d.js    three.js 3D figure viewer with WebXR (VR / AR) sessions
+js/game.js        game mode: song menu, Web Audio music, coach and lane rendering, scoring loop
+js/game-core.js   game logic without DOM or audio: moves, songs, choreography, pose matching
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, localStorage, JSON/CSV export
