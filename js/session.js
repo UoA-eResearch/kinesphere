@@ -1,4 +1,4 @@
-// Session data model, compact serialisation, localStorage persistence and file export.
+// Session data model, compact serialisation, browser persistence (IndexedDB) and file export.
 //
 // In memory a session is:
 //   { id, name, createdAt, durationMs, width, height, mirrored, model, engine, people, trigger,
@@ -257,7 +257,38 @@ export function deserialize(text) {
   };
 }
 
-// ---- localStorage --------------------------------------------------------------------
+// ---- persistence -----------------------------------------------------------------------
+// Session payloads live in IndexedDB, which browsers let a site fill with hundreds of MB (a
+// 15-minute recording is about 15 MB). The small metadata index stays in localStorage so the
+// session list can be read synchronously. Payloads saved by older versions in localStorage are
+// moved to IndexedDB on first use. Without IndexedDB, localStorage (about 5 MB) is used.
+
+const DB_NAME = 'kinesphere';
+const DB_STORE = 'sessions';
+let dbPromise = null;
+function openDB() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      if (!globalThis.indexedDB) { reject(new Error('IndexedDB is not available')); return; }
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error('IndexedDB is blocked by another tab'));
+    }).catch(err => { console.warn('Falling back to localStorage for sessions:', err); return null; });
+  }
+  return dbPromise;
+}
+function idb(db, mode, fn) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, mode);
+    const req = fn(tx.objectStore(DB_STORE));
+    tx.oncomplete = () => resolve(req?.result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+const isQuotaError = err => err && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED' || /quota/i.test(err.message || ''));
 
 function readIndex() {
   try {
@@ -278,13 +309,46 @@ function metaOf(session, bytes) {
   };
 }
 
+let migrated = null;
+/** Move session payloads left in localStorage by older versions into IndexedDB. */
+function migrate(db) {
+  migrated ??= (async () => {
+    if (!db) return;
+    const index = readIndex();
+    let moved = false;
+    for (const m of index) {
+      const text = localStorage.getItem(keyFor(m.id));
+      if (text == null) continue;
+      try {
+        await idb(db, 'readwrite', st => st.put(text, m.id));
+        localStorage.removeItem(keyFor(m.id));
+        m.bytes = text.length;
+        moved = true;
+      } catch (err) {
+        console.warn('Could not move session to IndexedDB', m.id, err);
+      }
+    }
+    if (moved) writeIndex(index);
+  })();
+  return migrated;
+}
+async function ready() {
+  const db = await openDB();
+  await migrate(db);
+  return db;
+}
+
 export const store = {
   /** Session metadata, newest first. */
   list() {
     return readIndex().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   },
-  load(id) {
-    const text = localStorage.getItem(keyFor(id));
+  /** Prepare storage (open the database and move old sessions over). */
+  init() { return ready(); },
+  async load(id) {
+    const db = await ready();
+    let text = db ? await idb(db, 'readonly', st => st.get(id)) : null;
+    text ??= localStorage.getItem(keyFor(id));
     if (!text) return null;
     try {
       return deserialize(text);
@@ -293,38 +357,49 @@ export const store = {
       return null;
     }
   },
-  /** Persist a session. Throws StorageFullError when the browser quota is exhausted. */
-  save(session) {
+  /** Persist a session. Rejects with StorageFullError when the browser quota is exhausted. */
+  async save(session) {
     const text = serialize(session);
-    try {
-      localStorage.setItem(keyFor(session.id), text);
-    } catch (err) {
-      throw new StorageFullError(
-        `Browser storage is full (this session needs ${(text.length * 2 / 1024 / 1024).toFixed(1)} MB). Export it to a file, or delete older sessions.`,
-      );
+    const db = await ready();
+    const full = () => new StorageFullError(
+      `Browser storage is full (this session needs ${(text.length / 1024 / 1024).toFixed(1)} MB). Export it to a file, or delete older sessions.`,
+    );
+    if (db) {
+      try {
+        await idb(db, 'readwrite', st => st.put(text, session.id));
+      } catch (err) {
+        if (isQuotaError(err)) throw full();
+        throw err;
+      }
+      // Ask the browser not to evict our data under storage pressure (granted silently or ignored).
+      navigator.storage?.persist?.().catch(() => {});
+    } else {
+      try { localStorage.setItem(keyFor(session.id), text); } catch { throw full(); }
     }
     const index = readIndex().filter(m => m.id !== session.id);
-    index.push(metaOf(session, text.length * 2));
+    index.push(metaOf(session, text.length));
     writeIndex(index);
   },
-  remove(id) {
+  async remove(id) {
+    const db = await ready();
+    if (db) await idb(db, 'readwrite', st => st.delete(id));
     localStorage.removeItem(keyFor(id));
     writeIndex(readIndex().filter(m => m.id !== id));
   },
-  rename(id, name) {
-    const session = this.load(id);
-    if (!session) return;
-    session.name = name;
-    this.save(session);
-  },
-  /** Approximate bytes used by Kinesphere in localStorage (UTF-16 => 2 bytes per char). */
-  usage() {
-    let bytes = 0;
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('kinesphere:')) bytes += (localStorage.getItem(k)?.length ?? 0) * 2;
+  /** Bytes used by saved sessions, and the browser's quota for this site (null if unknown). */
+  async usage() {
+    const used = readIndex().reduce((a, m) => a + (m.bytes || 0), 0);
+    const db = await ready();
+    let quota = null;
+    if (db) {
+      try {
+        const est = await navigator.storage?.estimate?.();
+        if (est?.quota) quota = est.quota - (est.usage || 0) + used;
+      } catch { /* unknown */ }
+    } else {
+      quota = 5 * 1024 * 1024;
     }
-    return bytes;
+    return { used, quota, backend: db ? 'indexeddb' : 'localstorage' };
   },
 };
 

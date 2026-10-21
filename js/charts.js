@@ -111,7 +111,7 @@ function nearestByT(series, t) {
  * Single-series line chart with a hairline grid, crosshair + tooltip.
  * series: [{ t (ms), v }]. Returns { setCursor(tMs|null), destroy() }.
  */
-export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUnit = '', yFormat = v => v.toFixed(2), xMax, height = 220 }) {
+export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUnit = '', yFormat = v => v.toFixed(2), tipFormat = null, xMax, height = 220 }) {
   container.classList.add('viz-line');
   let scales = null, cursorLine = null, cursorDot = null, cursorT = null;
 
@@ -174,7 +174,7 @@ export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUn
       const p = nearestByT(series, t);
       if (!p) return;
       positionCursor(p.t);
-      showTip(e.clientX, e.clientY, `<b>${fmtClock(p.t)}</b><br>${yFormat(p.v)}${yUnit ? ` ${escapeHtml(yUnit)}` : ''}`);
+      showTip(e.clientX, e.clientY, `<b>${fmtClock(p.t)}</b><br>${tipFormat ? escapeHtml(tipFormat(p.v)) : `${yFormat(p.v)}${yUnit ? ` ${escapeHtml(yUnit)}` : ''}`}`);
     });
     hit.addEventListener('pointerleave', () => { hideTip(); positionCursor(cursorT); });
     root.append(hit);
@@ -255,56 +255,93 @@ export function heatGrid(container, { values, rowLabels, colLabels, format = v =
 // ---- trajectory in the frame ---------------------------------------------------------
 
 /** path: [{ t, x, y }] in normalised frame coords; occupancy: { cols, rows, cells }. */
-export function trajectoryPlot(container, { path, occupancy, aspect, durationMs }) {
-  container.classList.add('viz-traj-wrap');
+/**
+ * Bird's eye view of the floor: the camera at the top centre with its field of view, the dancer's
+ * estimated path (coloured start to end), and shaded 0.25 m cells where they spent the most time.
+ * x is metres to the dancer's right as they face the camera, z metres from the camera.
+ */
+export function floorPlot(container, { path, cells, fov, durationMs }) {
+  container.classList.add('viz-floor-wrap');
   container.replaceChildren();
-  const W = 1000, H = Math.round(W / aspect);
-  const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'viz-svg viz-traj', width: '100%', role: 'img' });
+  const pts = path.filter(p => Number.isFinite(p.x) && Number.isFinite(p.z));
+  const tanH = Math.tan((fov / 2) * Math.PI / 180);
+  let xHalf = 1.5, zMax = 3;
+  for (const p of pts) { xHalf = Math.max(xHalf, Math.abs(p.x) + 0.5); zMax = Math.max(zMax, p.z + 0.6); }
+  for (const c of cells) { xHalf = Math.max(xHalf, Math.abs(c.x) + c.size + 0.3, Math.abs(c.x + c.size) + 0.3); zMax = Math.max(zMax, c.z + c.size + 0.3); }
+  zMax = Math.ceil(zMax * 2) / 2;
+  xHalf = Math.max(xHalf, zMax / (2 * 0.85)); // keep the plot no taller than it is wide
+  xHalf = Math.ceil(xHalf * 2) / 2;
+  const W = 1000, pad = { l: 70, r: 16, t: 44, b: 62 };
+  const pw = W - pad.l - pad.r, k = pw / (2 * xHalf), ph = zMax * k, H = Math.round(ph + pad.t + pad.b);
+  const X = x => pad.l + (x + xHalf) * k, Z = z => pad.t + z * k;
+  const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'viz-svg viz-floor', width: '100%', role: 'img',
+    'aria-label': 'Bird\'s eye view of the estimated path on the floor, camera at the top' });
   root.style.aspectRatio = `${W} / ${H}`;
-  root.append(svg('rect', { x: 0, y: 0, width: W, height: H, rx: 8, class: 'viz-frame' }));
-
-  const { cols, rows, cells } = occupancy;
-  const maxCell = Math.max(1e-9, ...cells);
-  const cw = W / cols, ch = H / rows;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const v = cells[r * cols + c];
-      if (!v) continue;
-      const rect = svg('rect', {
-        x: c * cw + 1, y: r * ch + 1, width: cw - 2, height: ch - 2, rx: 3, class: 'viz-occ',
-        style: `fill-opacity:${(0.06 + 0.34 * v / maxCell).toFixed(3)}`,
-      });
-      const text = `${fmtPct(v, 1)} of the time here`;
-      rect.addEventListener('pointermove', e => showTip(e.clientX, e.clientY, text));
-      rect.addEventListener('pointerleave', hideTip);
-      root.append(rect);
-    }
+  root.append(svg('rect', { x: pad.l, y: pad.t, width: pw, height: ph, rx: 6, class: 'viz-frame' }));
+  // grid every 0.5 m (1 m on big floors), labelled in metres
+  const step = xHalf > 4 || zMax > 8 ? 1 : 0.5;
+  for (let x = -Math.floor(xHalf / step) * step; x <= xHalf + 1e-6; x += step) {
+    const major = Math.abs(x - Math.round(x)) < 1e-6;
+    root.append(svg('line', { x1: X(x), x2: X(x), y1: pad.t, y2: pad.t + ph, class: 'viz-grid', style: major ? '' : 'stroke-dasharray:2 4' }));
+    if (major) root.append(svg('text', { x: X(x), y: pad.t + ph + 26, class: 'viz-tick', 'text-anchor': 'middle' }, [x === 0 ? '0' : `${x > 0 ? '+' : '−'}${Math.abs(x)} m`]));
   }
-
-  const T = Math.max(1, durationMs || (path.length ? path[path.length - 1].t : 1));
+  for (let z = step; z <= zMax + 1e-6; z += step) {
+    const major = Math.abs(z - Math.round(z)) < 1e-6;
+    root.append(svg('line', { x1: pad.l, x2: pad.l + pw, y1: Z(z), y2: Z(z), class: 'viz-grid', style: major ? '' : 'stroke-dasharray:2 4' }));
+    if (major && z < zMax - 1e-6) root.append(svg('text', { x: pad.l - 10, y: Z(z) + 8, class: 'viz-tick', 'text-anchor': 'end' }, [`${z} m`]));
+  }
+  // camera field of view
+  const zSide = xHalf / tanH; // where the edge of view leaves the plot through its sides
+  const corners = zSide >= zMax
+    ? [[0, 0], [-zMax * tanH, zMax], [zMax * tanH, zMax]]
+    : [[0, 0], [-xHalf, zSide], [-xHalf, zMax], [xHalf, zMax], [xHalf, zSide]];
+  const wedge = corners.map(([x, z]) => `${X(x).toFixed(1)},${Z(z).toFixed(1)}`);
+  root.append(svg('polygon', { points: wedge.join(' '), class: 'viz-fov' }));
+  // time spent in each floor cell
+  const maxShare = Math.max(1e-9, ...cells.map(c => c.share));
+  for (const c of cells) {
+    const rect = svg('rect', {
+      x: X(c.x) + 1, y: Z(c.z) + 1, width: c.size * k - 2, height: c.size * k - 2, rx: 3, class: 'viz-occ',
+      style: `fill-opacity:${(0.05 + 0.35 * c.share / maxShare).toFixed(3)}`,
+    });
+    const text = `${fmtPct(c.share, 1)} of the time in this ${Math.round(c.size * 100)} cm square`;
+    rect.addEventListener('pointermove', e => showTip(e.clientX, e.clientY, text));
+    rect.addEventListener('pointerleave', hideTip);
+    root.append(rect);
+  }
+  // camera
+  const cx = X(0), cy = Z(0);
+  root.append(svg('rect', { x: cx - 22, y: cy - 30, width: 44, height: 26, rx: 5, class: 'viz-camera' }));
+  root.append(svg('text', { x: cx + 32, y: cy - 10, class: 'viz-label' }, ['Camera']));
+  // path
+  const T = Math.max(1, durationMs || (pts.length ? pts[pts.length - 1].t : 1));
   const g = svg('g', { 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none', style: 'pointer-events:none' });
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1], b = path[i];
-    g.append(svg('line', { x1: a.x * W, y1: a.y * H, x2: b.x * W, y2: b.y * H, stroke: heat(b.t / T).fill }));
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    g.append(svg('line', { x1: X(a.x), y1: Z(a.z), x2: X(b.x), y2: Z(b.z), stroke: heat(b.t / T).fill }));
   }
   root.append(g);
-  if (path.length) {
-    const s = path[0], e = path[path.length - 1];
-    root.append(svg('circle', { cx: s.x * W, cy: s.y * H, r: 9, class: 'viz-start' }));
-    root.append(svg('circle', { cx: e.x * W, cy: e.y * H, r: 9, style: `fill:${heat(1).fill}`, class: 'viz-end' }));
+  if (pts.length) {
+    const s0 = pts[0], e = pts[pts.length - 1];
+    root.append(svg('circle', { cx: X(s0.x), cy: Z(s0.z), r: 9, class: 'viz-start' }));
+    root.append(svg('circle', { cx: X(e.x), cy: Z(e.z), r: 9, style: `fill:${heat(1).fill}`, class: 'viz-end' }));
   }
-  const hit = svg('rect', { x: 0, y: 0, width: W, height: H, fill: 'transparent' });
+  root.append(svg('text', { x: pad.l, y: H - 6, class: 'viz-tick' }, ["← dancer's left"]));
+  root.append(svg('text', { x: pad.l + pw, y: H - 6, class: 'viz-tick', 'text-anchor': 'end' }, ["dancer's right →"]));
+  const hit = svg('rect', { x: pad.l, y: pad.t, width: pw, height: ph, fill: 'transparent' });
   hit.addEventListener('pointermove', e => {
-    if (!path.length) return;
-    const r = root.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    if (!pts.length) return;
+    const r = root.getBoundingClientRect(), sc = r.width / W;
+    const mx = (e.clientX - r.left) / sc, my = (e.clientY - r.top) / sc;
     let best = null, bd = Infinity;
-    for (const p of path) {
-      const d = Math.hypot((p.x - x) * aspect, p.y - y);
+    for (const p of pts) {
+      const d = Math.hypot(X(p.x) - mx, Z(p.z) - my);
       if (d < bd) { bd = d; best = p; }
     }
-    if (best && bd < 0.08) showTip(e.clientX, e.clientY, `<b>${fmtClock(best.t)}</b><br>x ${fmtPct(best.x)} · y ${fmtPct(best.y)}`);
-    else hideTip();
+    if (best && bd < 30) {
+      const side = Math.abs(best.x) < 0.05 ? 'centre' : `${Math.abs(best.x).toFixed(1)} m to the ${best.x > 0 ? 'right' : 'left'}`;
+      showTip(e.clientX, e.clientY, `<b>${fmtClock(best.t)}</b><br>${best.z.toFixed(1)} m from the camera · ${side}`);
+    } else hideTip();
   });
   hit.addEventListener('pointerleave', hideTip);
   root.append(hit);

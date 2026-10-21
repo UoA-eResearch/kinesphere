@@ -1,14 +1,14 @@
 // Kinesphere: live pose view + recording, analysis dashboard and session library.
 
 import {
-  createPoseDetector, createTracker, handsAboveHead, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE, HAND_SIZE, WORLD_SIZE,
+  createPoseDetector, createTracker, handsAboveHead, bodyInFrame, minVisibilityFor, engineInfo, ENGINES, MAX_PEOPLE, FRAME_SIZE, HAND_SIZE, WORLD_SIZE,
   modelCacheInfo, clearModelCache,
 } from './pose.js';
 import {
   store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, handOffset, personPresent,
 } from './session.js';
 import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
-import { lineChart, stackedBar, trajectoryPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
+import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
@@ -20,7 +20,6 @@ const HOLD_MS = 1500;          // how long both hands must stay up to trigger st
 const COUNTDOWN_MS = 3000;     // countdown after the start gesture
 const LOCKOUT_MS = 4000;       // ignore the gesture for a while after it fired
 const STORE_INTERVAL_MS = 1000 / 30; // store at most 30 frames per second
-const STORAGE_BUDGET = 5 * 1024 * 1024;
 const THEME_KEY = 'kinesphere:theme';
 const OVERLAY_KEY = 'kinesphere:overlay';
 const VIDEO_KEY = 'kinesphere:video';
@@ -33,6 +32,7 @@ const DEPTH_KEY = 'kinesphere:depth';
 const MIRROR3D_KEY = 'kinesphere:mirror3d';
 const OVERLAY_METRICS_KEY = 'kinesphere:replayOverlay';
 const SHOW_VALUES_KEY = 'kinesphere:showValues';
+const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -50,7 +50,7 @@ const ui = {
   status: $('#status'), fps: $('#fps'),
   recBadge: $('#rec-badge'), recTime: $('#rec-time'), countdown: $('#countdown'),
   hold: $('#hold'), holdFill: $('#hold-fill'), holdLabel: $('#hold-label'),
-  load: $('#load'), loadFill: $('#load-fill'), loadLabel: $('#load-label'),
+  frameWarn: $('#frame-warn'), load: $('#load'), loadFill: $('#load-fill'), loadLabel: $('#load-label'),
   views: { live: $('#view-live'), dashboard: $('#view-dashboard'), sessions: $('#view-sessions') },
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
@@ -66,6 +66,7 @@ const state = {
   tracker: createTracker(1), effects: [],
   stream: null, deviceId: null, mirrored: true, facing: 'user', loopRunning: false, lastVideoTime: -1,
   recording: null, countdown: null, hold: null, lockoutUntil: 0,
+  framing: { bad: false, since: 0 }, // "body partially out of frame" hint, debounced
   fps: { count: 0, since: performance.now() },
   lastStatus: '',
   showOverlay: localStorage.getItem(OVERLAY_KEY) !== 'off',
@@ -671,8 +672,20 @@ function onDetection(slots, now) {
 
   if (game.isOpen) game.onPoses(slots, now, (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
   else updateGesture(present, now);
+  updateFraming(present, now);
   updateStatus(present.length);
   if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
+}
+
+/** Show a quiet hint while someone tracked has less than head-to-hips in view (held 0.6 s to avoid flicker). */
+function updateFraming(present, now) {
+  const minVis = minVisibilityFor(state.detector?.engine);
+  const bad = present.some(pose => !bodyInFrame(pose.lm, 0, minVis));
+  const f = state.framing;
+  if (bad !== f.bad) { f.bad = bad; f.since = now; }
+  const show = present.length > 0 && f.bad && now - f.since > 600;
+  if (show !== !ui.frameWarn.hidden && (show || now - f.since > 600)) ui.frameWarn.hidden = !show;
+  if (!present.length) ui.frameWarn.hidden = true;
 }
 
 function updateGesture(present, now) {
@@ -767,34 +780,32 @@ function stopRecording(trimBeforeT = null, { navigate = true, discard = false, n
   });
   if (name) session.name = `${name} · ${session.name}`;
   if (navigate) { openSession(session, { save: true }); return session; }
-  try {
-    store.save(session);
-    updateSessionCount();
-  } catch (err) {
-    if (!(err instanceof StorageFullError)) throw err;
+  store.save(session).then(updateSessionCount, err => {
+    if (!(err instanceof StorageFullError)) console.error(err);
     toast(err.message, 8000);
-  }
+  });
   return session;
 }
 
 // ---------------------------------------------------------------------------------------
 // Sessions
 
-function openSession(session, { save = false } = {}) {
+async function openSession(session, { save = false } = {}) {
   const analyses = Array.from({ length: session.people || 1 }, (_, p) => analyze(personView(session, p)));
   const person = Math.max(0, analyses.findIndex(a => a.ok));
-  state.current = { session, analyses, person, saved: false, saveError: null };
+  const current = { session, analyses, person, saved: false, saveError: null };
   if (save) {
     try {
-      store.save(session);
-      state.current.saved = true;
+      await store.save(session);
+      current.saved = true;
     } catch (err) {
-      if (!(err instanceof StorageFullError)) throw err;
-      state.current.saveError = err.message;
+      if (!(err instanceof StorageFullError)) console.error(err);
+      current.saveError = err.message;
     }
   } else {
-    state.current.saved = true;
+    current.saved = true;
   }
+  state.current = current;
   updateSessionCount();
   renderDashboard();
   setView('dashboard');
@@ -900,18 +911,18 @@ function renderDashboard() {
     e.target.value = name;
     session.name = name;
     if (state.current.saved) {
-      try { store.save(session); } catch (err) { toast(err.message); }
+      store.save(session).then(updateSessionCount, err => toast(err.message));
     }
-    updateSessionCount();
   });
   root.querySelector('[data-action="export-json"]').onclick = () => exportJSON(session);
   root.querySelector('[data-action="export-csv"]').onclick = () => exportCSV(session);
   root.querySelector('[data-action="delete"]').onclick = () => {
     if (!confirm(`Delete “${session.name}”? This cannot be undone unless you exported it.`)) return;
-    store.remove(session.id);
-    state.current = null;
-    updateSessionCount();
-    setView('sessions');
+    store.remove(session.id).catch(err => toast(`Could not delete: ${err.message}`)).finally(() => {
+      state.current = null;
+      updateSessionCount();
+      setView('sessions');
+    });
   };
   root.querySelector('[data-action="new"]').onclick = () => setView('live');
   root.querySelectorAll('.person-tabs .tab').forEach(tab => {
@@ -1021,29 +1032,30 @@ function dashboardCards(a) {
 
     <section class="card">
       <h2>Speed</h2>
-      <p class="card-sub">Average joint speed over time, in torso lengths per second (so it does not depend on how far you stood from the camera).</p>
-      <div class="stat-row">
-        ${stat('Mean speed', a.speed.mean.toFixed(2), 'torso lengths / s')}
-        ${stat('Peak', Number.isFinite(a.speed.peak) ? a.speed.peak.toFixed(2) : '–', `at ${fmtClock(a.speed.peakT)}`)}
-      </div>
+      <p class="card-sub">How fast the body moved over time: the average speed of the 13 major joints, smoothed over a second. Higher means faster movement.</p>
+      <div class="stat-row" id="speed-stats"></div>
       <div id="speed-chart"></div>
+      <label class="check"><input type="checkbox" id="show-speed-values"> Show values</label>
       <div id="speed-table"></div>
+      <p class="fine">Speeds are measured on screen relative to the dancer's own size (torso lengths per second), so they do not depend on how far from the camera you stood; <em>Show values</em> converts them to approximate metres per second using ${a.speed.metresMeasured ? `this dancer's torso length measured in 3D (${(a.speed.metresPerTorso * 100).toFixed(0)} cm)` : `a typical torso length of ${(a.speed.metresPerTorso * 100).toFixed(0)} cm (this session has no 3D data)`}. Movement straight towards or away from the camera is under-counted.
+        Tracking glitches are removed before averaging: a joint speed far beyond that joint's usual range for the session (an extreme outlier) or faster than any human limb, and frames where several joints jump at once, typically when the body is very close to the camera or partly out of view${a.speed.removed > 0 ? ` (${fmtPct(a.speed.removed, 1)} of joint speed samples in this session)` : ' (none in this session)'}.</p>
     </section>
 
     <section class="card">
-      <h2>Path through the frame</h2>
-      <p class="card-sub">Where the hips were in the camera frame, from start (ring) to end (filled dot). Shaded cells show where you spent the most time.</p>
+      <h2>Path on the floor</h2>
+      <p class="card-sub">A bird's eye view of where you moved in the room, estimated from the camera: the camera is at the top, and the shaded wedge is what it could see. Your path runs from start (ring) to end (filled dot); shaded squares show where you spent the most time.</p>
       <div class="two-col">
         <div id="space-plot"></div>
         <div>
           <div class="stat-row">
-            ${stat('Horizontal coverage', fmtPct(a.space.xRange[1] - a.space.xRange[0]), 'of frame width')}
-            ${stat('Vertical coverage', fmtPct(a.space.yRange[1] - a.space.yRange[0]), 'of frame height')}
-            ${stat('Path length', a.space.pathLength.toFixed(1), 'torso lengths')}
+            ${stat('Floor area used', `${a.space.width.toFixed(1)} × ${a.space.depth.toFixed(1)}`, 'm, side to side × front to back')}
+            ${stat('Distance travelled', a.space.travelled.toFixed(1), 'm')}
+            ${stat('Distance from camera', a.space.distance.toFixed(1), 'm, typical')}
           </div>
           <div id="space-table"></div>
         </div>
       </div>
+      <p class="fine">Estimated, not measured: distance from the camera comes from how big your torso looks in the picture (${a.space.torsoMeasured ? `your torso is ${(a.space.torsoM * 100).toFixed(0)} cm in 3D` : `assuming a typical ${(a.space.torsoM * 100).toFixed(0)} cm torso`}) and an assumed webcam field of view of ${a.space.fov}°, and side-to-side position from where your hips are across the picture. Expect roughly ±20% on distances; bending or turning briefly can look like stepping back, so positions are smoothed over a second. Areas cover 96% of the time (2nd–98th percentile).</p>
     </section>
 
     ${a.shapes.length ? `
@@ -1107,17 +1119,35 @@ function mountCharts(a, session, root) {
       ['Left side', fmtPct(b.lateral.left, 1), '', ''], ['Right side', fmtPct(b.lateral.right, 1), '', ''],
       ...LEVELS.map(l => [`${l.label} level`, '', fmtPct(a.levels.shares[l.key], 1), ''])]));
 
-  state.charts.push(lineChart(root.querySelector('#speed-chart'), {
-    series: a.speed.series, xMax: session.durationMs, yLabel: 'Speed (torso lengths / s)', yUnit: 'torso lengths/s',
-  }));
-  root.querySelector('#speed-table').append(dataTable('Show speed data', ['Time', 'Speed (torso lengths/s)'],
-    a.speed.series.map(p => [fmtClock(p.t), p.v.toFixed(2)])));
+  // Speed: values are hidden by default (torso lengths per second mean little on their own);
+  // "Show values" adds numbers, converted to approximate metres per second.
+  const sp = a.speed, mps = v => v * sp.metresPerTorso;
+  let speedChart = null;
+  const speedBox = root.querySelector('#show-speed-values');
+  speedBox.checked = localStorage.getItem(SPEED_VALUES_KEY) === 'on';
+  const peakOf = Math.max(1e-6, ...sp.series.map(p => p.v));
+  const drawSpeed = () => {
+    const show = speedBox.checked;
+    root.querySelector('#speed-stats').innerHTML = show
+      ? `${stat('Mean speed', mps(sp.mean).toFixed(2), `m/s (≈ ${sp.mean.toFixed(2)} torso lengths/s)`)}
+         ${stat('Peak', Number.isFinite(sp.peak) ? mps(sp.peak).toFixed(2) : '–', `m/s, at ${fmtClock(sp.peakT)}`)}`
+      : `${stat('Fastest moment', Number.isFinite(sp.peak) ? fmtClock(sp.peakT) : '–', 'into the session')}
+         ${stat('Average', Number.isFinite(sp.peak) && sp.peak > 0 ? fmtPct(sp.mean / sp.peak) : '–', 'of the peak speed')}`;
+    if (speedChart) { speedChart.destroy(); state.charts.splice(state.charts.indexOf(speedChart), 1); }
+    speedChart = lineChart(root.querySelector('#speed-chart'), show
+      ? { series: sp.series.map(p => ({ t: p.t, v: mps(p.v) })), xMax: session.durationMs, yLabel: 'Speed (m/s, approximate)', yUnit: 'm/s' }
+      : { series: sp.series.map(p => ({ t: p.t, v: p.v / peakOf })), yMax: 1, xMax: session.durationMs, yLabel: 'Speed (slower ↓ ↑ faster)', yFormat: () => '', tipFormat: v => `${fmtPct(v)} of the peak` });
+    state.charts.push(speedChart);
+    if (state.replay) speedChart.setCursor(state.replay.time?.() ?? null);
+  };
+  speedBox.addEventListener('change', () => { localStorage.setItem(SPEED_VALUES_KEY, speedBox.checked ? 'on' : 'off'); drawSpeed(); });
+  drawSpeed();
+  root.querySelector('#speed-table').append(dataTable('Show speed data', ['Time', 'Speed (m/s, approx.)', 'Speed (torso lengths/s)'],
+    sp.series.map(p => [fmtClock(p.t), mps(p.v).toFixed(2), p.v.toFixed(2)])));
 
-  trajectoryPlot(root.querySelector('#space-plot'), {
-    path: a.space.path, occupancy: a.space.occupancy, aspect: session.width / session.height, durationMs: session.durationMs,
-  });
-  root.querySelector('#space-table').append(dataTable('Show position data', ['Time', 'X (% of width)', 'Y (% of height)'],
-    a.space.path.map(p => [fmtClock(p.t), (p.x * 100).toFixed(1), (p.y * 100).toFixed(1)])));
+  floorPlot(root.querySelector('#space-plot'), { path: a.space.path, cells: a.space.cells, fov: a.space.fov, durationMs: session.durationMs });
+  root.querySelector('#space-table').append(dataTable('Show floor position data', ['Time', 'Side to side (m, + = dancer\'s right)', 'From camera (m)'],
+    a.space.path.map(p => [fmtClock(p.t), p.x.toFixed(2), p.z.toFixed(2)])));
 
   a.shapes.forEach((s, i) => bodyFigure(root.querySelector(`#shape-${i}`), { pose: s.pose, showSides: false }));
 }
@@ -1225,6 +1255,18 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
   ctx.restore();
 }
 
+/** The quiet "body partially out of frame" hint, bottom right of a canvas. */
+function drawFramingHint(ctx, w, h) {
+  ctx.save();
+  ctx.font = `${Math.round(Math.max(12, h * 0.028))}px system-ui, sans-serif`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = 'rgba(205, 209, 216, 0.85)';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'; ctx.shadowBlur = 3;
+  ctx.fillText('Body partially out of frame', w - h * 0.025, h - h * 0.025);
+  ctx.restore();
+}
+
 function setupReplay(session, root, onTime, metrics = null) {
   const canvas = root.querySelector('#replay-canvas');
   const range = root.querySelector('#replay-range');
@@ -1283,6 +1325,9 @@ function setupReplay(session, root, onTime, metrics = null) {
     if (showMetrics && hasFrame && poses3d[metrics.person]) {
       drawMetricsOverlay(ctx, metrics.analysis, i, poses3d[metrics.person].lm, w, h, mirrorView, times, people > 1 ? metrics.person : null);
     }
+    if (hasFrame && Array.from({ length: people }, (_, p) => frameOffset(session, i, p)).some(o => personPresent(lm, o) && !bodyInFrame(lm, o, minVis))) {
+      drawFramingHint(ctx, w, h);
+    }
     viewer?.setPeople(poses3d, minVis);
   };
   const setTime = (nt, dt) => {
@@ -1333,10 +1378,12 @@ function setupReplay(session, root, onTime, metrics = null) {
 // ---------------------------------------------------------------------------------------
 // Session library
 
-function renderSessions() {
+async function renderSessions() {
   const list = store.list();
-  const usage = store.usage();
-  const pct = clamp(usage / STORAGE_BUDGET * 100, 0, 100);
+  const { used: usage, quota, backend } = await store.usage();
+  const pct = quota ? clamp(usage / quota * 100, 0, 100) : 0;
+  const quotaText = backend === 'localstorage' ? 'of about 5 MB browser storage used'
+    : quota ? `of about ${fmtBytes(quota)} available in this browser used` : 'of browser storage used';
   const items = list.map(m => `
     <div class="card session-item" data-id="${escapeHtml(m.id)}">
       <div class="grow">
@@ -1354,7 +1401,7 @@ function renderSessions() {
     <div class="sessions-header">
       <div>
         <h2>Sessions</h2>
-        <div class="usage"><span class="usage-bar"><span class="usage-fill" style="width:${pct.toFixed(0)}%"></span></span>${fmtBytes(usage)} of about 5 MB browser storage used</div>
+        <div class="usage"><span class="usage-bar"><span class="usage-fill" style="width:${pct.toFixed(0)}%"></span></span>${fmtBytes(usage)} ${quotaText}</div>
       </div>
       <div class="dash-actions">
         <button class="btn" data-action="import">Import…</button>
@@ -1363,11 +1410,11 @@ function renderSessions() {
     </div>
     ${list.length ? `<div class="session-list">${items}</div>` : `
       <div class="card empty">No sessions yet. Record one from the Live view, or import a session file that someone shared with you.<br>
-      Sessions are stored only in this browser (localStorage).</div>`}
+      Sessions are stored only in this browser.</div>`}
   `;
 }
 
-ui.views.sessions.addEventListener('click', e => {
+ui.views.sessions.addEventListener('click', async e => {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
@@ -1378,13 +1425,16 @@ ui.views.sessions.addEventListener('click', e => {
   if (action === 'delete') {
     const meta = store.list().find(m => m.id === id);
     if (!confirm(`Delete “${meta?.name ?? 'this session'}”? This cannot be undone unless you exported it.`)) return;
-    store.remove(id);
-    if (state.current?.session.id === id) state.current = null;
-    updateSessionCount();
-    renderSessions();
+    store.remove(id).catch(err => toast(`Could not delete: ${err.message}`)).finally(() => {
+      if (state.current?.session.id === id) state.current = null;
+      updateSessionCount();
+      renderSessions();
+    });
     return;
   }
-  const session = store.load(id);
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const session = await store.load(id).finally(() => { btn.disabled = false; });
   if (!session) { toast('This session could not be read from storage.'); return; }
   if (action === 'open') openSession(session);
   else if (action === 'export-json') exportJSON(session);
@@ -1522,6 +1572,7 @@ function init() {
       : 'Camera access needs a secure page. Open this app over https:// or from localhost.');
   }
   updateSessionCount();
+  store.init().then(() => { if (state.view === 'sessions') renderSessions(); });
 }
 
 const game = createGame({

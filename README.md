@@ -4,14 +4,16 @@ A browser app that watches you dance through your webcam, tracks your body with
 [MediaPipe Pose Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker)
 (or, optionally, [MoveNet](https://www.tensorflow.org/hub/tutorials/movenet) via TensorFlow.js),
 and turns a recorded session into a dashboard of movement metrics: how big your kinesphere was,
-where in the body the activity was concentrated, how fast you moved over time, and how you moved
-around the frame. A Just Dance-style **game mode** scores you against an animated coach.
+where in the body the activity was concentrated, how fast you moved over time, and a bird's eye view of
+your path across the floor. A Just Dance-style **game mode** scores you against an animated coach.
 
 Everything runs in the browser. Video never leaves your device and is never stored; only the
-detected pose landmarks are recorded. Sessions are persisted in the browser's `localStorage`
-and can be exported to a file so you can share them or move them between browsers.
+detected pose landmarks are recorded. Sessions are persisted in the browser (IndexedDB, with room
+for recordings of 15 minutes and more) and can be exported to a file so you can share them or move them between browsers.
 
-The app is a plain static site (no build step) and is hosted with GitHub Pages.
+The app is a plain static site (no build step) and is hosted with GitHub Pages. The dashboard and
+tracking demo were conceived and designed by Danielle Lottridge, Andrew Wilson, Nick Young, Becca
+Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
 
 ## Using the app
 
@@ -19,7 +21,10 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
    Lite) are downloaded on first use with a progress bar in the preview. They are then kept in
    the browser's Cache Storage, so later visits load them instantly, even offline; the **?** help
    panel shows how much is cached and can clear it. Then your webcam is shown mirrored with the detected skeleton drawn on top
-   (left side orange, right side blue). Stand back so your whole body is in the frame.
+   (left side orange, right side blue). Stand back so your whole body is in the frame. While less
+   than head to hips is in view (or few joints are visible), a small grey *Body partially out of
+   frame* note appears above the status line, because pose models degrade when the body is very
+   close or only partly in view; the same note is shown in the dashboard replay and the game.
    The buttons in the corner of the preview toggle the pose overlay (<kbd>O</kbd>), hide the camera
    feed so only the overlay is shown on black (<kbd>V</kbd>), and make the camera view fullscreen
    (<kbd>F</kbd>); recording controls stay available in fullscreen. Hiding the feed does not stop
@@ -35,11 +40,12 @@ The app is a plain static site (no build step) and is hosted with GitHub Pages.
    raise both hands above your head and hold them there for 1.5 s. A 3-second countdown
    follows so you can get into position. The same gesture (or **Stop** / <kbd>Space</kbd>)
    ends the recording; the frames spent holding the stop gesture are trimmed off.
-3. **Dashboard.** When the recording stops the session is analysed, saved to `localStorage`
-   and the dashboard opens.
+3. **Dashboard.** When the recording stops the session is analysed, saved in the browser and the
+   dashboard opens. Recordings use about 0.75–1 MB per minute, so a 15-minute session is about
+   11–15 MB.
 4. **Sessions.** The *Sessions* tab lists everything saved in this browser, with **Open**,
-   **Export JSON**, **CSV** and **Delete** for each session, plus an indicator of how much of
-   the roughly 5 MB storage budget is used.
+   **Export JSON**, **CSV** and **Delete** for each session, plus an indicator of how much
+   storage the sessions use out of what the browser makes available to the site.
 5. **Share.** **Export JSON** downloads a `*.kinesphere.json` file. Anyone can drop that file
    into **Import…** to see the same dashboard. **Export CSV** produces one row per frame with
    `x, y, z, visibility` for each of the 33 landmarks, for analysis elsewhere.
@@ -140,8 +146,8 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
 | **Person tabs** | When several people were tracked, one tab per person (coloured like the overlay) switches every metric below, and the overlay, to that dancer. |
 | **Kinesphere** | Share of time in a small, medium or large kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton. With MediaPipe models the kinesphere is measured in **3D** from MediaPipe's world landmarks (metric positions in metres): limb lengths are each segment's median 3D length (also shown in cm) and reaches towards or away from the camera count fully. MoveNet sessions and recordings made before 3D support fall back to 2D screen positions, where limb lengths are the 90th percentile of each segment's on-screen length and reaches towards the camera are under-counted. The panel says which mode a session used. Spheres: **small** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **large** at the hands when outstretched (+ forearm). The spheres are sized from the arms (legs measured from the torso centre are longer, so leg-sized spheres would put large out of the arms' reach) and stay fixed for the whole session. Each hand, and each lifted foot, is classed by the sphere it is nearest to, with the boundaries halfway between neighbouring spheres, and the frame takes the largest of those; relaxed arms hanging at the sides therefore count as small. A leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24). "Show limb lengths and sphere sizes" lists every estimate. |
 | **Body** | **Body part activity**: 13 markers (head, shoulders, elbows, hands, hips, knees, feet) sized and coloured by each part's share of all movement; *Show values* prints the percentages on the figure, and "Show body part data" lists share of movement, active time (share of the session the part moved faster than 0.5 torso lengths/s) and mean speed. **Left / right**: the figure split down the middle with each side's share of movement (head excluded). **Level: where was the activity?**: share of time at a high, medium or low level. This is about position, not which limb moved: *high* when at least one limb is above standing shoulder height, *low* when a hand or the hips are below standing knee height, *medium* otherwise; the head is not counted, standing legs are ignored, and standing heights are measured from the session with the lowest visible joint taken as the floor. The floor is only measured while a foot (ankle, heel or toe) is inside the frame; when the feet are cropped out, the dancer is assumed to be standing and the floor is placed at the session's standing hip height below the hips, so *low* is then only detected from the hands (the overlay says "feet out of view"). |
-| **Speed** | Mean joint speed over time, in torso lengths per second (smoothed over 1 s), with the mean and peak. |
-| **Path through the frame** | The path of the hips through the camera frame, coloured from start to end, over shaded cells showing where you spent the most time. Coverage is the 2nd–98th percentile spread of the hip position; path length is the distance the hips travelled. |
+| **Speed** | Mean speed of the 13 major joints over time (smoothed over 1 s). Numbers are hidden by default, showing the shape of the curve, the fastest moment and the average as a share of the peak; **Show values** adds the numbers in approximate metres per second (torso lengths per second converted with the dancer's torso length measured in 3D, or a typical 50 cm for MoveNet sessions). Speeds use the body scale of the moment, so stepping towards the camera does not inflate them. Tracking glitches are removed first: a Hampel filter drops any landmark that jumps more than 0.35 torso lengths away from the median of its neighbours within ±3 frames (smooth movement, however fast, stays near that median; a glitch does not), then joint speeds that are extreme outliers for that joint (above Q3 + 3 IQR on a log scale, or faster than 20 torso lengths/s, about 10 m/s) and frames where several joints jump at once are left out. The removed share is reported under the chart, and the same clean-up applies to body part activity. |
+| **Path on the floor** | A bird's eye view of where the dancer moved in the room, with the camera at the top and its field of view shaded. Distance from the camera is estimated from the apparent size of the torso (pinhole camera model with an assumed 65° horizontal field of view, typical of webcams, and the torso length in metres from MediaPipe's world landmarks, or 50 cm for MoveNet); the sideways position comes from where the hips are across the picture. Positions are median-smoothed over ±0.5 s. Shaded 25 cm squares show where the dancer spent the most time. Stats: floor area used (side to side × front to back, 2nd–98th percentile), distance travelled (the smoothed path sampled every 0.25 s) and typical distance from the camera. These are estimates, roughly ±20%, and a camera with a very different field of view scales them. "Show floor position data" lists the path in metres. |
 | **Top shapes** | The three most common body shapes, found by k-means clustering of the pose in every frame (experimental). |
 
 ## Data and privacy
@@ -155,10 +161,15 @@ the dancer's own left and right, shown as they appeared in the mirrored preview.
   the site's data.
 * Game best scores and game settings are kept in `localStorage` too (`kinesphere:gameBest`,
   `kinesphere:gameVolume`, `kinesphere:gameRecord`).
-* Sessions live in `localStorage` under keys starting with `kinesphere:`. Browsers allow about
-  5 MB per site, which is about 3 minutes of MediaPipe recording at 30 frames per second (about 4.5 minutes for MoveNet sessions, which have no 3D world landmarks). When the
-  quota is exceeded the dashboard still shows, with a warning that the session was not saved;
-  export it to a file or delete older sessions to make room.
+* Sessions live in the browser's IndexedDB (database `kinesphere`, store `sessions`), with a
+  small index of names and sizes in `localStorage` (`kinesphere:sessions`). IndexedDB is allowed
+  far more space than `localStorage`'s 5 MB: typically hundreds of MB or more, depending on the
+  browser and free disk space, so recordings of 10–15 minutes (about 1 MB per minute with
+  MediaPipe at 30 frames per second) fit comfortably. The app asks the browser to keep the data
+  persistent, so it is not evicted when the disk runs low. Sessions saved by earlier versions in
+  `localStorage` are moved to IndexedDB automatically. If storage is ever full, the dashboard
+  still shows, with a warning that the session was not saved; export it to a file or delete
+  older sessions to make room. Clearing the site's data deletes the sessions.
 * Only landmarks are recorded, at up to 30 frames per second. The stored frame rate is limited by
   how fast MediaPipe runs on your device (shown in the corner of the preview).
 
@@ -240,7 +251,7 @@ js/game.js        game mode: song menu, Web Audio music, coach and lane renderin
 js/game-core.js   game logic without DOM or audio: moves, songs, choreography, pose matching
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
-js/session.js     session model, compact JSON format, localStorage, JSON/CSV export
+js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export
 js/util.js        formatting and statistics helpers
 ```
 
@@ -254,6 +265,24 @@ when a 3D view is opened, `three` 0.170 (via the import map in `index.html`).
 The site is served from the root of the `main` branch (Settings → Pages → Deploy from a branch →
 `main` / `/ (root)`). All paths are relative, so it also works from a project sub-path such as
 `https://<org>.github.io/kinesphere/`.
+
+## Credits
+
+The ideas and design of the dashboard and of this tracking demo, and the Kinesphere project, are
+by:
+
+| Name | Email |
+| --- | --- |
+| Danielle Lottridge | [d.lottridge@auckland.ac.nz](mailto:d.lottridge@auckland.ac.nz) |
+| Andrew Wilson | [andrew.wilson@auckland.ac.nz](mailto:andrew.wilson@auckland.ac.nz) |
+| Nick Young | [nick.young@auckland.ac.nz](mailto:nick.young@auckland.ac.nz) |
+| Becca Weber | [b.weber@auckland.ac.nz](mailto:b.weber@auckland.ac.nz) |
+| Brenda San Germán Bravo | [brenda.san.german.bravo@auckland.ac.nz](mailto:brenda.san.german.bravo@auckland.ac.nz) |
+| Maxine Yang | [myan565@aucklanduni.ac.nz](mailto:myan565@aucklanduni.ac.nz) |
+
+All at the University of Auckland. The app is built by the University of Auckland Centre for
+eResearch. The kinesphere measure follows Kubota et al., *Emotion Estimation Using Laban Feature
+Values Based on a Multi-scale Kinesphere* (SUI '24).
 
 ## Contributing and license
 

@@ -7,6 +7,7 @@ import {
   starsFor, maxPointsFor, STAR_LEVELS,
 } from './game-core.js';
 import { personColors } from './effects.js';
+import { bodyInFrame } from './pose.js';
 
 const BEST_KEY = 'kinesphere:gameBest';
 const VOLUME_KEY = 'kinesphere:gameVolume';
@@ -321,7 +322,7 @@ export function createGame(deps) {
       music: createMusic(song, chor, volume),
       moves: chor.moves.map(m => ({ ...m, best: new Array(players).fill(0), result: null })),
       scores: Array.from({ length: players }, () => ({ points: 0, combo: 0, maxCombo: 0, counts: Object.fromEntries(RATINGS.map(r => [r.key, 0])), seen: false })),
-      popups: [], live: new Array(players).fill(0), aspect: 16 / 9,
+      popups: [], live: new Array(players).fill(0), aspect: 16 / 9, framing: { bad: false, since: 0, show: false },
       recording: localStorage.getItem(RECORD_KEY) === 'on', session: null,
     };
     computeLayout();
@@ -406,6 +407,10 @@ export function createGame(deps) {
     const t = run.music.time() - (performance.now() - perfNow) / 1000 - INPUT_LAG;
     const angles = slots.slice(0, run.players).map(pose => (pose ? playerAngles(pose.lm, run.aspect) : null));
     angles.forEach((a, p) => { if (a) run.scores[p].seen = true; });
+    const f = run.framing, present = slots.slice(0, run.players).filter(Boolean);
+    const bad = present.some(pose => !bodyInFrame(pose.lm, 0, 0.5));
+    if (bad !== f.bad) { f.bad = bad; f.since = perfNow; }
+    if (perfNow - f.since > 600) f.show = bad && present.length > 0;
     let current = null;
     for (const m of run.moves) {
       if (m.result) continue;
@@ -472,6 +477,13 @@ export function createGame(deps) {
     ctx.lineWidth = 3; ctx.strokeStyle = rate(live).color; ctx.shadowColor = rate(live).color; ctx.shadowBlur = 8 + 20 * live;
     ctx.stroke(); ctx.restore();
     ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(pip.x, pip.y, pip.w, pip.h);
+    if (run.framing.show) {
+      ctx.font = `${Math.round(Math.max(11, H * 0.026))}px system-ui, sans-serif`;
+      ctx.fillStyle = 'rgba(205,209,216,0.85)';
+      // the video covers the PiP box, so the hint goes just outside it, clear of the buttons and meter
+      if (layout.wide) { ctx.textAlign = 'left'; ctx.fillText('Body partially out of frame', pip.x, pip.y - 7); }
+      else { ctx.textAlign = 'right'; ctx.fillText('Body partially out of frame', pip.x + pip.w, pip.y + pip.h + Math.max(14, H * 0.03)); }
+    }
     // scores
     const maxPts = maxPointsFor(run.chor.moves);
     const fs = Math.round(Math.max(13, H * 0.04));

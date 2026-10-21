@@ -177,6 +177,9 @@ select, input[type="text"] {
 .stage:fullscreen #hud-record { background: var(--accent); border-color: transparent; }
 .stage:fullscreen #hud-stop { background: var(--rec); border-color: transparent; }
 .status { display: inline-block; align-self: flex-start; background: rgba(0, 0, 0, 0.55); padding: 0.4rem 0.75rem; border-radius: 10px; font-size: 0.95rem; }
+/* Quiet hint when head-to-hips is not fully in view (tracking degrades) */
+.frame-warn { align-self: flex-start; font-size: 0.78rem; color: rgba(225, 228, 234, 0.85); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); }
+.frame-warn[hidden] { display: none; }
 .countdown { font-size: clamp(64px, 18vw, 140px); font-weight: 800; line-height: 1; }
 .hold { display: flex; align-items: center; gap: 0.75rem; }
 .hold-bar { flex: 1; max-width: 320px; height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.3); overflow: hidden; }
@@ -316,6 +319,11 @@ select, input[type="text"] {
 .hg-cell { display: grid; place-items: center; min-height: 64px; border-radius: 6px; font-weight: 650; font-size: 1.05rem; cursor: default; }
 .viz-frame { fill: var(--surface-2); stroke: var(--axis); stroke-width: 1; }
 .viz-occ { fill: var(--ink); }
+.viz-fov { fill: var(--accent); fill-opacity: 0.06; stroke: var(--axis); stroke-dasharray: 6 5; }
+.viz-camera { fill: var(--ink-2); }
+.viz-floor-wrap { max-width: 640px; }
+.viz-floor .viz-tick { font-size: 22px; }
+.viz-floor .viz-label { font-size: 22px; }
 .viz-start { fill: var(--surface); stroke: var(--ink); stroke-width: 3; }
 .viz-end { stroke: var(--surface); stroke-width: 3; }
 .viz-figure { display: block; width: 100%; max-height: 360px; margin: 0 auto; overflow: visible; }

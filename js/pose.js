@@ -586,6 +586,22 @@ export function handsAboveHead(lm, offset = 0, minVis = 0.3) {
 }
 
 /**
+ * Whether enough of the body is in the frame for reliable tracking: at least head to hips (nose,
+ * both shoulders, both hips) visible and inside the picture, and at least 7 of the 13 major joints
+ * visible. Pose models degrade when the body is very close or only partly in view.
+ */
+const FRAME_CORE = [0, 11, 12, 23, 24];
+const FRAME_MAJOR = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+export function bodyInFrame(lm, offset = 0, minVis = 0.5) {
+  const ok = i => {
+    const o = offset + i * STRIDE;
+    return lm[o + 3] >= minVis && lm[o] >= -0.01 && lm[o] <= 1.01 && lm[o + 1] >= -0.01 && lm[o + 1] <= 1.01;
+  };
+  if (!FRAME_CORE.every(ok)) return false;
+  return FRAME_MAJOR.filter(ok).length >= 7;
+}
+
+/**
  * Draw a skeleton from a flat landmark array onto a 2D canvas context.
  * Left-side limbs are orange, right-side limbs are blue, the rest is neutral (by default).
  */

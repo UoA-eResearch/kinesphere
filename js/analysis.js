@@ -22,6 +22,13 @@ const MAX_GAP_S = 0.5;        // gaps longer than this are not used for velociti
 const ACTIVE_SPEED = 0.5;     // torso lengths / s: a body part faster than this counts as "active"
 const SCALE_WINDOW_MS = 2000; // half-window for the per-frame body scale
 const LEG_GESTURE = 0.5;      // a foot raised more than this many shin lengths is a gesture, not support
+const GLITCH_CAP = 20;        // torso lengths / s (about 10 m/s): faster than any limb, so a tracking glitch
+const OUTLIER_IQR = 3;        // speeds beyond Q3 + 3 IQR (on a log scale) are extreme outliers
+const GLITCH_JOINTS = 3;      // a frame where this many joints jump at once is a glitch for every joint
+const SPIKE_WINDOW = 3;       // frames either side for the Hampel spike filter
+const SPIKE_TORSO = 0.35;     // a landmark this many torso lengths from its neighbours' median is a spike
+export const CAMERA_HFOV = 65; // degrees: assumed horizontal field of view of a typical webcam
+export const ASSUMED_TORSO_M = 0.5; // metres, mid-hip to mid-shoulder, when no 3D data says otherwise
 
 export const KINESPHERE_CLASSES = [
   { key: 'small', label: 'Small' },
@@ -41,6 +48,15 @@ const LIMBS = [
   { key: 'legR', name: 'R leg', kind: 'leg', pts: [24, 26, 28] },
 ];
 const FLOOR_EXTRA = [29, 30, 31, 32]; // heels and toes, when the engine provides them
+
+/** Upper fence for extreme outliers of positive, right-skewed values: Q3 + k IQR of their logs. */
+function logFence(values, k = OUTLIER_IQR) {
+  const logs = [];
+  for (const v of values) if (Number.isFinite(v) && v > 0) logs.push(Math.log(v));
+  if (logs.length < 20) return Infinity;
+  const q1 = percentile(logs, 0.25), q3 = percentile(logs, 0.75);
+  return Math.exp(q3 + k * Math.max(q3 - q1, 0.25));
+}
 
 /** Percentile p over a +-halfMs time window around every frame (NaN where the value is NaN). */
 function rollingPercentile(times, values, halfMs, p) {
@@ -151,12 +167,49 @@ export function analyze(session) {
 
   // Per-landmark position arrays in "square" units (x scaled by aspect so distances are isotropic).
   const X = {}, Y = {}, V = {};
+  const raw = {};
   for (const k of MAJOR) {
     const xs = new Float32Array(n), ys = new Float32Array(n), vs = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const o = (i * NUM_LANDMARKS + k) * STRIDE;
       xs[i] = lm[o] * aspect; ys[i] = lm[o + 1]; vs[i] = lm[o + 3];
     }
+    raw[k] = { xs, ys, vs };
+  }
+  // Tracking glitches: a landmark that jumps away for a frame or two and comes back. A Hampel
+  // filter compares each position with the median of its neighbours within +-3 frames; smooth
+  // movement, however fast, stays close to that median, a spike does not. Spikes are treated as
+  // not visible, so they never reach the smoothing, speeds, kinesphere or level.
+  const rawTorso = [];
+  for (let i = 0; i < n; i++) {
+    if ([11, 12, 23, 24].some(k => raw[k].vs[i] < VIS_MIN)) continue;
+    rawTorso.push(Math.hypot((raw[11].xs[i] + raw[12].xs[i] - raw[23].xs[i] - raw[24].xs[i]) / 2, (raw[11].ys[i] + raw[12].ys[i] - raw[23].ys[i] - raw[24].ys[i]) / 2));
+  }
+  const S0 = median(rawTorso);
+  let glitchSamples = 0, seenSamples = 0;
+  if (S0 > 0) {
+    const limit = SPIKE_TORSO * S0, wx = [], wy = [];
+    for (const k of MAJOR) {
+      const { xs, ys, vs } = raw[k];
+      const bad = [];
+      for (let i = 0; i < n; i++) {
+        if (vs[i] < VIS_MIN) continue;
+        seenSamples++;
+        wx.length = 0; wy.length = 0;
+        for (let j = Math.max(0, i - SPIKE_WINDOW); j <= Math.min(n - 1, i + SPIKE_WINDOW); j++) {
+          if (j !== i && vs[j] >= VIS_MIN) { wx.push(xs[j]); wy.push(ys[j]); }
+        }
+        if (wx.length < 3) continue;
+        wx.sort((a, b) => a - b); wy.sort((a, b) => a - b);
+        const mx = wx[wx.length >> 1], my = wy[wy.length >> 1];
+        if (Math.hypot(xs[i] - mx, ys[i] - my) > limit) bad.push(i);
+      }
+      for (const i of bad) vs[i] = 0;
+      glitchSamples += bad.length;
+    }
+  }
+  for (const k of MAJOR) {
+    const { xs, ys, vs } = raw[k];
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) mask[i] = vs[i] >= VIS_MIN ? 1 : 0;
     X[k] = smoothFrames(xs, 2, mask); Y[k] = smoothFrames(ys, 2, mask); V[k] = vs;
@@ -182,26 +235,54 @@ export function analyze(session) {
   }
   const S = Math.max(1e-3, median(torso));
 
-  // Per-landmark speeds (torso lengths / s).
+  // ---- Per-frame body scale: rolling 90th percentile of the torso length, so the scale follows
+  // the dancer moving towards or away from the camera but ignores brief foreshortening.
+  const frameScale = rollingPercentile(times, torso, SCALE_WINDOW_MS, 0.9);
+  for (let i = 0; i < n; i++) {
+    if (Number.isFinite(frameScale[i])) frameScale[i] = clamp(frameScale[i], S * 0.5, S * 2);
+    else if (valid[i]) frameScale[i] = S;
+  }
+
+  // Per-landmark speeds in torso lengths / s, using the body scale of the moment, so stepping
+  // close to the camera does not inflate speeds.
   const speed = {};
-  const meanSpeed = {};
   for (const k of MAJOR) {
     const sp = new Float32Array(n).fill(NaN);
     for (let i = 1; i < n; i++) {
       const dt = (times[i] - times[i - 1]) / 1000;
       if (dt <= 0 || dt > MAX_GAP_S || !valid[i] || !valid[i - 1] || !visible(k, i) || !visible(k, i - 1)) continue;
-      sp[i] = Math.hypot(X[k][i] - X[k][i - 1], Y[k][i] - Y[k][i - 1]) / dt / S;
+      sp[i] = Math.hypot(X[k][i] - X[k][i - 1], Y[k][i] - Y[k][i - 1]) / dt / ((frameScale[i] + frameScale[i - 1]) / 2);
     }
     speed[k] = sp;
-    meanSpeed[k] = mean(sp);
   }
-  // Overall speed over time.
+  // Remove extreme outliers: tracking glitches (a joint, or the whole skeleton, jumping for a
+  // frame or two, typically when the body is very close to the camera or partly out of view).
+  let speedSamples = 0, speedRemoved = 0;
+  const jumps = new Uint8Array(n);
+  const fences = {};
+  for (const k of MAJOR) {
+    fences[k] = Math.min(GLITCH_CAP, logFence(speed[k]));
+    for (let i = 0; i < n; i++) if (speed[k][i] > fences[k]) jumps[i]++;
+  }
+  for (const k of MAJOR) {
+    const sp = speed[k];
+    for (let i = 0; i < n; i++) {
+      if (!Number.isFinite(sp[i])) continue;
+      speedSamples++;
+      if (sp[i] > fences[k] || jumps[i] >= GLITCH_JOINTS) { sp[i] = NaN; speedRemoved++; }
+    }
+  }
+  const meanSpeed = Object.fromEntries(MAJOR.map(k => [k, mean(speed[k])]));
+  // Overall speed over time, with frames that are still extreme after that removed too.
   const frameSpeed = new Float32Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
     let s = 0, c = 0;
     for (const k of MAJOR) { const v = speed[k][i]; if (Number.isFinite(v)) { s += v; c++; } }
     if (c) frameSpeed[i] = s / c;
   }
+  const frameFence = logFence(frameSpeed);
+  let framesRemoved = 0;
+  for (let i = 0; i < n; i++) if (frameSpeed[i] > frameFence) { frameSpeed[i] = NaN; framesRemoved++; }
   const smoothSpeed = smoothTime(times, frameSpeed, 500);
   let peak = -Infinity, peakT = 0;
   for (let i = 0; i < n; i++) if (smoothSpeed[i] > peak) { peak = smoothSpeed[i]; peakT = times[i]; }
@@ -226,13 +307,6 @@ export function analyze(session) {
   const leftSum = sideSum(LEFT_SLOTS), rightSum = sideSum(RIGHT_SLOTS);
   const lateral = { left: leftSum / ((leftSum + rightSum) || 1), right: rightSum / ((leftSum + rightSum) || 1) };
 
-  // ---- Per-frame body scale: rolling 90th percentile of the torso length, so the scale follows
-  // the dancer moving towards or away from the camera but ignores brief foreshortening.
-  const frameScale = rollingPercentile(times, torso, SCALE_WINDOW_MS, 0.9);
-  for (let i = 0; i < n; i++) {
-    if (Number.isFinite(frameScale[i])) frameScale[i] = clamp(frameScale[i], S * 0.5, S * 2);
-    else if (valid[i]) frameScale[i] = S;
-  }
   const pt = (k, i) => [X[k][i], Y[k][i]];
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   // Kinesphere centre: midway between the mid-hip and the mid-shoulder (centre of the torso).
@@ -455,33 +529,48 @@ export function analyze(session) {
     feetInView: validCount ? measured / validCount : 0,
   };
 
-  // Path: where the body centre was in the frame (selfie view, normalised 0..1).
-  const px = new Float32Array(n).fill(NaN), py = new Float32Array(n).fill(NaN);
+  // Floor path, bird's eye view: distance from the camera estimated from the apparent size of the
+  // torso (pinhole camera with an assumed field of view, torso length in metres from the 3D world
+  // landmarks or a typical 0.5 m), sideways position from where the hips are across the frame.
+  // x is metres to the dancer's right (as they face the camera), z metres from the camera.
+  const torsoM = clamp(world3d ? world3d.T3 : ASSUMED_TORSO_M, 0.35, 0.7);
+  const tanH = Math.tan(CAMERA_HFOV / 2 * Math.PI / 180), tanV = tanH / aspect;
+  const fxRaw = new Float32Array(n).fill(NaN), fzRaw = new Float32Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
-    if (!valid[i]) continue;
-    const x = cx[i] / aspect;
-    px[i] = session.mirrored ? 1 - x : x;
-    py[i] = cy[i];
+    if (!valid[i] || !(frameScale[i] > 0)) continue;
+    const z = torsoM / (frameScale[i] * 2 * tanV);
+    fzRaw[i] = z;
+    fxRaw[i] = -(cx[i] / aspect - 0.5) * 2 * z * tanH; // image left is the dancer's right
   }
-  const pathX = bucketize(times, px, 600, durationMs), pathY = bucketize(times, py, 600, durationMs);
-  const path = pathX.map((p, i) => ({ t: p.t, x: p.v, y: pathY[i]?.v ?? p.v }));
-  const cols = 12, rows = Math.max(3, Math.round(cols / aspect));
-  const cells = new Float32Array(cols * rows);
-  let pathLen = 0;
+  const fx = rollingPercentile(times, fxRaw, 500, 0.5), fz = rollingPercentile(times, fzRaw, 500, 0.5);
+  const floorX = bucketize(times, fx, 600, durationMs), floorZ = bucketize(times, fz, 600, durationMs);
+  const floorPath = floorX.map((p, i) => ({ t: p.t, x: p.v, z: floorZ[i]?.v ?? NaN })).filter(p => Number.isFinite(p.z));
+  // Distance travelled: the smoothed position sampled every 0.25 s.
+  let travelled = 0, lastI = -1;
   for (let i = 0; i < n; i++) {
-    if (!Number.isFinite(px[i])) continue;
-    const c = clamp(Math.floor(px[i] * cols), 0, cols - 1), r = clamp(Math.floor(py[i] * rows), 0, rows - 1);
-    cells[r * cols + c] += 1 / validCount;
-    if (i > 0 && Number.isFinite(px[i - 1]) && (times[i] - times[i - 1]) / 1000 <= MAX_GAP_S) {
-      pathLen += Math.hypot(cx[i] - cx[i - 1], cy[i] - cy[i - 1]) / S;
-    }
+    if (!Number.isFinite(fx[i]) || !Number.isFinite(fz[i])) continue;
+    if (lastI < 0) { lastI = i; continue; }
+    const gap = times[i] - times[lastI];
+    if (gap < 250) continue;
+    if (gap <= 1000) travelled += Math.hypot(fx[i] - fx[lastI], fz[i] - fz[lastI]);
+    lastI = i;
   }
+  // Time spent in 0.25 m floor cells.
+  const CELL = 0.25;
+  const xs = [], zs = [];
+  for (let i = 0; i < n; i++) if (Number.isFinite(fx[i]) && Number.isFinite(fz[i])) { xs.push(fx[i]); zs.push(fz[i]); }
+  const cellMap = new Map();
+  for (let j = 0; j < xs.length; j++) {
+    const key = `${Math.floor(xs[j] / CELL)},${Math.floor(zs[j] / CELL)}`;
+    cellMap.set(key, (cellMap.get(key) || 0) + 1 / xs.length);
+  }
+  const floorCells = [...cellMap].map(([key, share]) => { const [c, r] = key.split(',').map(Number); return { x: c * CELL, z: r * CELL, size: CELL, share }; });
+  const xRange = [percentile(xs, 0.02), percentile(xs, 0.98)], zRange = [percentile(zs, 0.02), percentile(zs, 0.98)];
   const space = {
-    path,
-    occupancy: { cols, rows, cells },
-    xRange: [percentile(px, 0.02), percentile(px, 0.98)],
-    yRange: [percentile(py, 0.02), percentile(py, 0.98)],
-    pathLength: pathLen,
+    path: floorPath, cells: floorCells, xRange, zRange,
+    width: xRange[1] - xRange[0], depth: zRange[1] - zRange[0],
+    distance: median(zs), travelled,
+    torsoM, torsoMeasured: Boolean(world3d), fov: CAMERA_HFOV, aspect,
   };
 
   // Shapes: cluster body poses (relative to hips, in torso units, selfie view) with k-means.
@@ -514,7 +603,11 @@ export function analyze(session) {
     kinesphere,
     body: { joints, lateral },
     levels,
-    speed: { series: speedSeries, mean: mean(frameSpeed), peak: Number.isFinite(peak) ? peak : NaN, peakT },
+    speed: {
+      series: speedSeries, mean: mean(frameSpeed), peak: Number.isFinite(peak) ? peak : NaN, peakT,
+      removed: seenSamples ? (glitchSamples + speedRemoved) / seenSamples : 0, spikes: glitchSamples, framesRemoved: validCount ? framesRemoved / validCount : 0,
+      metresPerTorso: torsoM, metresMeasured: Boolean(world3d),
+    },
     space, shapes,
     // Per-frame values for the replay's metrics overlay.
     frames: { kClass, kLimb, level, scale: frameScale, floor: floorY, floorMeasured, jointSpeed },
