@@ -57,7 +57,7 @@ const ui = {
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   sandControls: $('#sand-controls'), sandHue: $('#sand-hue'), sandGravity: $('#sand-gravity'), sandGravityVal: $('#sand-gravity-val'),
-  sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandReset: $('#sand-reset'),
+  sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandMomentum: $('#sand-momentum'), sandMomentumVal: $('#sand-momentum-val'), sandReset: $('#sand-reset'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
   live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
@@ -418,6 +418,8 @@ function syncSandUI() {
   ui.sandHue.value = String(sandSettings.hue);
   ui.sandGravity.value = String(sandSettings.gravity);
   ui.sandDecay.value = String(sandSettings.decay);
+  ui.sandMomentum.value = String(sandSettings.momentum);
+  ui.sandMomentumVal.textContent = `${sandSettings.momentum.toFixed(1)}×`;
   ui.sandGravityVal.textContent = `${sandSettings.gravity.toFixed(1)}×`;
   ui.sandDecayVal.textContent = `${sandSettings.decay.toFixed(1)} s`;
   ui.sandControls.style.setProperty('--sand', `hsl(${sandSettings.hue}, 70%, 65%)`);
@@ -425,11 +427,11 @@ function syncSandUI() {
 function initSandControls() {
   try { setSandSettings(JSON.parse(localStorage.getItem(SAND_KEY)) ?? {}); } catch { /* defaults */ }
   const update = () => {
-    setSandSettings({ hue: Number(ui.sandHue.value), gravity: Number(ui.sandGravity.value), decay: Number(ui.sandDecay.value) });
+    setSandSettings({ hue: Number(ui.sandHue.value), gravity: Number(ui.sandGravity.value), decay: Number(ui.sandDecay.value), momentum: Number(ui.sandMomentum.value) });
     localStorage.setItem(SAND_KEY, JSON.stringify(sandSettings));
     syncSandUI();
   };
-  for (const el of [ui.sandHue, ui.sandGravity, ui.sandDecay]) el.addEventListener('input', update);
+  for (const el of [ui.sandHue, ui.sandGravity, ui.sandDecay, ui.sandMomentum]) el.addEventListener('input', update);
   ui.sandReset.addEventListener('click', () => { setSandSettings(SAND_DEFAULTS); localStorage.removeItem(SAND_KEY); syncSandUI(); });
   syncSandUI();
 }

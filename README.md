@@ -31,12 +31,19 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    the camera: detection and recording carry on.
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
-   sparks that fly off fast-moving joints, a constellation, or **Sandman**: a body made of sand
-   that sheds grains as you move (a trickle when still, a stream from fast limbs), which fall,
+   sparks that fly off fast-moving joints, a constellation, **Sandman** or **Fuzzy blur**.
+   *Sandman* draws a body made of sand that sheds grains as you move: a trickle when still, a
+   stream from fast limbs and a burst when a limb speeds up or stops sharply. Grains leave with
+   the momentum of the body part that shed them (its velocity, nudged along its acceleration),
+   so a sweeping arm flings sand onwards and a sudden stop throws it forwards; then they fall,
    settle on the bottom of the picture and fade. When Sandman is selected, sliders under the
    controls set the particle **Colour**, **Gravity** (0 to 3 times normal; below zero the grains
-   float upwards) and **Decay time** (0.3 to 8 s before a grain fades). They take effect
-   immediately, are remembered, and **Reset** restores the defaults. The same style and settings
+   float upwards), **Decay time** (0.3 to 8 s before a grain fades) and **Momentum** (how much
+   of the body's motion the grains carry: 0 drops them in place, 2 exaggerates it). They take
+   effect immediately, are remembered, and **Reset** restores the defaults. *Sparks* also carry
+   the joints' momentum. *Fuzzy blur* draws the body as a soft, out-of-focus glow (left side
+   orange, right side blue) that lingers for a fraction of a second, so movement smears into a
+   motion blur. The same style and settings
    are used in the dashboard replay. Styles are purely visual; the recorded data is identical.
    If you have more than one camera a **Camera** selector appears next to the model selector;
    your choice is remembered. Rear-facing cameras are shown un-mirrored, and **Mirror view** in

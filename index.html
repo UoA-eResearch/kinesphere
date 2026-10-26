@@ -113,6 +113,8 @@
           <input type="range" id="sand-gravity" min="-1" max="3" step="0.1" aria-label="Particle gravity"> <span id="sand-gravity-val" class="mono"></span></label>
         <label class="select" title="How long a grain lasts before it fades away">Decay time
           <input type="range" id="sand-decay" min="0.3" max="8" step="0.1" aria-label="Particle decay time"> <span id="sand-decay-val" class="mono"></span></label>
+        <label class="select" title="How much of the body's motion the grains carry off: 0 drops them in place, 1 flings them with the limb, 2 exaggerates it">Momentum
+          <input type="range" id="sand-momentum" min="0" max="2" step="0.1" aria-label="Particle momentum"> <span id="sand-momentum-val" class="mono"></span></label>
         <button id="sand-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
       </div>
       <p id="setting-help" class="setting-help"></p>

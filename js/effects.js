@@ -24,6 +24,7 @@ export const STYLES = [
   { id: 'sparks', label: 'Sparks' },
   { id: 'constellation', label: 'Constellation' },
   { id: 'sandman', label: 'Sandman (falling particles)' },
+  { id: 'fuzzy', label: 'Fuzzy blur' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -46,22 +47,30 @@ function project(lm, offset, w, h, mirror) {
   return { x, y, v };
 }
 
-/** Tracks joint velocities (px/s) between frames with light smoothing. */
-function makeTracker() {
+/**
+ * Tracks joint velocity (px/s) and acceleration (px/s^2) over time, smoothed with exponential
+ * filters (time constants in seconds) so the estimate is steady whatever the frame rate.
+ */
+function makeTracker(tauV = 0.06, tauA = 0.1) {
   let prev = null;
   const vx = new Float32Array(NUM_LANDMARKS), vy = new Float32Array(NUM_LANDMARKS);
+  const ax = new Float32Array(NUM_LANDMARKS), ay = new Float32Array(NUM_LANDMARKS);
   return {
-    vx, vy,
+    vx, vy, ax, ay,
     update(p, dt) {
       if (prev && dt > 0 && dt < 0.5) {
+        const kv = 1 - Math.exp(-dt / tauV), ka = 1 - Math.exp(-dt / tauA);
         for (let i = 0; i < NUM_LANDMARKS; i++) {
-          vx[i] = vx[i] * 0.4 + ((p.x[i] - prev.x[i]) / dt) * 0.6;
-          vy[i] = vy[i] * 0.4 + ((p.y[i] - prev.y[i]) / dt) * 0.6;
+          const nvx = vx[i] + ((p.x[i] - prev.x[i]) / dt - vx[i]) * kv;
+          const nvy = vy[i] + ((p.y[i] - prev.y[i]) / dt - vy[i]) * kv;
+          ax[i] += ((nvx - vx[i]) / dt - ax[i]) * ka;
+          ay[i] += ((nvy - vy[i]) / dt - ay[i]) * ka;
+          vx[i] = nvx; vy[i] = nvy;
         }
-      } else { vx.fill(0); vy.fill(0); }
+      } else { vx.fill(0); vy.fill(0); ax.fill(0); ay.fill(0); }
       prev = p;
     },
-    reset() { prev = null; vx.fill(0); vy.fill(0); },
+    reset() { prev = null; vx.fill(0); vy.fill(0); ax.fill(0); ay.fill(0); },
   };
 }
 
@@ -289,14 +298,15 @@ function sparksStyle() {
         tracker.update(p, dt);
         for (const j of EMITTERS) {
           if (p.v[j] < minVis) continue;
-          const speed = Math.hypot(tracker.vx[j], tracker.vy[j]);
-          const n = Math.min(14, Math.floor(speed / (h * 0.9) * 10 * Math.min(1, dt * 30)) + (Math.random() < dt * 4 ? 1 : 0));
+          const speed = Math.hypot(tracker.vx[j], tracker.vy[j]), acc = Math.hypot(tracker.ax[j], tracker.ay[j]);
+          const n = Math.min(18, Math.floor((speed / (h * 0.9) + acc / (h * 8)) * 10 * Math.min(1, dt * 30)) + (Math.random() < dt * 4 ? 1 : 0));
           const hue = (j === 0 ? 50 : isLeft(j) ? rand(10, 45) : rand(190, 230)) + pc.hue;
           for (let k = 0; k < n && particles.length < MAX; k++) {
             const a = rand(0, Math.PI * 2), s = rand(0, h * 0.15);
             particles.push({
               x: p.x[j] + rand(-4, 4), y: p.y[j] + rand(-4, 4),
-              vx: tracker.vx[j] * 0.35 + Math.cos(a) * s, vy: tracker.vy[j] * 0.35 + Math.sin(a) * s - h * 0.05,
+              // sparks carry the joint's momentum (and a little of its acceleration) off with them
+              vx: (tracker.vx[j] + tracker.ax[j] * 0.04) * 0.8 + Math.cos(a) * s, vy: (tracker.vy[j] + tracker.ay[j] * 0.04) * 0.8 + Math.sin(a) * s - h * 0.05,
               life: rand(0.45, 1.1), age: 0, size: rand(1.5, Math.max(3, w / 320)), hue,
             });
           }
@@ -315,7 +325,7 @@ function sparksStyle() {
         q.age += dt;
         if (q.age >= q.life) { particles[i] = particles[particles.length - 1]; particles.pop(); continue; }
         q.vy += g * dt;
-        q.vx *= 0.985;
+        q.vx *= Math.pow(0.6, dt);
         q.x += q.vx * dt;
         q.y += q.vy * dt;
         const k = 1 - q.age / q.life;
@@ -440,7 +450,7 @@ export function drawPersonBadge(ctx, lm, offset, w, h, person, { mirror = false,
 // ---- sandman: a body of sand that sheds grains, which fall, pile up on the floor and fade ----
 
 /** Live-adjustable sandman settings (shared by every sandman effect, read on every frame). */
-export const SAND_DEFAULTS = { hue: 38, gravity: 1, decay: 2.5 };
+export const SAND_DEFAULTS = { hue: 38, gravity: 1, decay: 2.5, momentum: 1 };
 export const sandSettings = { ...SAND_DEFAULTS };
 export function setSandSettings(patch) {
   for (const k of Object.keys(SAND_DEFAULTS)) if (Number.isFinite(patch?.[k])) sandSettings[k] = patch[k];
@@ -454,7 +464,7 @@ function sandmanStyle() {
   return {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0 } = opts;
-      const { hue: baseHue, gravity, decay } = sandSettings;
+      const { hue: baseHue, gravity, decay, momentum } = sandSettings;
       const hue = baseHue + (person ? personColors(person).hue : 0);
       const g = h * 0.8 * gravity;              // px/s^2
       const grain = Math.max(1.5, w / 480);     // grain size, px
@@ -462,12 +472,16 @@ function sandmanStyle() {
       ctx.save();
       if (p) {
         tracker.update(p, dt);
-        const { vx, vy } = tracker;
-        const emit = (x, y, jvx, jvy, n) => {
+        const { vx, vy, ax, ay } = tracker;
+        // Grains leave with the momentum of the body part that shed them (its velocity, nudged
+        // along its acceleration), so a sweeping arm flings sand onwards and a sudden stop throws
+        // it forwards. `momentum` scales how much of that motion they keep.
+        const emit = (x, y, jvx, jvy, jax, jay, n) => {
           for (let k = 0; k < n && grains.length < MAX; k++) {
+            const keep = momentum * rand(0.75, 1.05);
             grains.push({
               x: x + rand(-grain, grain), y: y + rand(-grain, grain),
-              vx: jvx * 0.3 + rand(-1, 1) * h * 0.03, vy: jvy * 0.3 + rand(-1, 1) * h * 0.02,
+              vx: (jvx + jax * 0.05) * keep + rand(-1, 1) * h * 0.03, vy: (jvy + jay * 0.05) * keep + rand(-1, 1) * h * 0.02,
               age: 0, life: decay * rand(0.6, 1.2), size: grain * rand(0.7, 1.3), l: rand(52, 78),
             });
           }
@@ -483,14 +497,15 @@ function sandmanStyle() {
             const t = Math.random();
             body.push([p.x[a] + (p.x[b] - p.x[a]) * t + rand(-scatter, scatter), p.y[a] + (p.y[b] - p.y[a]) * t + rand(-scatter, scatter)]);
           }
-          // shed grains: a trickle when still, a stream when the limb moves fast
+          // shed grains: a trickle when still, a stream when the limb moves fast, a burst when it
+          // speeds up or stops sharply
           const sp = (Math.hypot(vx[a], vy[a]) + Math.hypot(vx[b], vy[b])) / 2;
-          const rate = (len / h) * 260 * (1 + 4 * Math.min(2, sp / (h * 0.8)));
+          const acc = (Math.hypot(ax[a], ay[a]) + Math.hypot(ax[b], ay[b])) / 2;
+          const rate = (len / h) * 260 * (1 + 4 * Math.min(2, sp / (h * 0.8)) + 3 * Math.min(2, acc / (h * 6)));
           let n2 = Math.floor(rate * dt + Math.random());
           while (n2-- > 0) {
-            const t = Math.random();
-            emit(p.x[a] + (p.x[b] - p.x[a]) * t, p.y[a] + (p.y[b] - p.y[a]) * t,
-              vx[a] + (vx[b] - vx[a]) * t, vy[a] + (vy[b] - vy[a]) * t, 1);
+            const t = Math.random(), lerp = (arr) => arr[a] + (arr[b] - arr[a]) * t;
+            emit(p.x[a] + (p.x[b] - p.x[a]) * t, p.y[a] + (p.y[b] - p.y[a]) * t, lerp(vx), lerp(vy), lerp(ax), lerp(ay), 1);
           }
         }
         if ([11, 12, 23, 24].every(i => p.v[i] >= minVis)) {
@@ -502,7 +517,8 @@ function sandmanStyle() {
             const bot = [p.x[23] + (p.x[24] - p.x[23]) * u, p.y[23] + (p.y[24] - p.y[23]) * u];
             body.push([top[0] + (bot[0] - top[0]) * v, top[1] + (bot[1] - top[1]) * v]);
           }
-          if (Math.random() < dt * 40) emit(body[body.length - 1][0], body[body.length - 1][1], vx[23], vy[23], 2);
+          const hx = (vx[23] + vx[24]) / 2, hy = (vy[23] + vy[24]) / 2;
+          if (Math.random() < dt * 40) emit(body[body.length - 1][0], body[body.length - 1][1], hx, hy, (ax[23] + ax[24]) / 2, (ay[23] + ay[24]) / 2, 2);
         }
         const head = neckAndHead(p, minVis);
         if (head) {
@@ -512,7 +528,7 @@ function sandmanStyle() {
             body.push([head.hx + Math.cos(a) * r, head.hy + Math.sin(a) * r]);
           }
           body.push(...Array.from({ length: 12 }, () => { const t = Math.random(); return [head.nx + (head.hx - head.nx) * t, head.ny + (head.hy - head.ny) * t]; }));
-          if (Math.random() < dt * 30) emit(head.hx + rand(-head.r, head.r), head.hy + rand(-head.r, head.r) * 0.5, vx[0], vy[0], 2);
+          if (Math.random() < dt * 30) emit(head.hx + rand(-head.r, head.r), head.hy + rand(-head.r, head.r) * 0.5, vx[0], vy[0], ax[0], ay[0], 2);
         }
         ctx.fillStyle = hsla(hue, 70, 72, 0.9);
         for (const [x, y] of body) ctx.fillRect(x - grain / 2, y - grain / 2, grain, grain);
@@ -525,8 +541,8 @@ function sandmanStyle() {
         q.age += dt;
         if (q.age >= q.life) { grains[i] = grains[grains.length - 1]; grains.pop(); continue; }
         q.vy += g * dt;
-        q.vx *= Math.pow(0.4, dt);
-        q.vy *= Math.pow(0.85, dt);
+        q.vx *= Math.pow(0.55, dt); // light air drag: momentum carries the grains a while
+        q.vy *= Math.pow(0.8, dt);
         q.x += q.vx * dt;
         q.y += q.vy * dt;
         if (q.y > floor - q.size) {
@@ -546,7 +562,93 @@ function sandmanStyle() {
   };
 }
 
-const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle };
+// ---- fuzzy blur: a soft, out-of-focus glow of the body that smears with motion ----
+
+const blobSprites = new Map();
+/** A soft round brush in one colour (cached): opaque centre fading smoothly to nothing. */
+function blobSprite(color) {
+  let c = blobSprites.get(color);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, color);
+  grad.addColorStop(0.35, color.replace(/^#(..)(..)(..)$/, (_, r, gg, b) => `rgba(${parseInt(r, 16)},${parseInt(gg, 16)},${parseInt(b, 16)},0.6)`));
+  grad.addColorStop(0.7, color.replace(/^#(..)(..)(..)$/, (_, r, gg, b) => `rgba(${parseInt(r, 16)},${parseInt(gg, 16)},${parseInt(b, 16)},0.15)`));
+  grad.addColorStop(1, color.replace(/^#(..)(..)(..)$/, (_, r, gg, b) => `rgba(${parseInt(r, 16)},${parseInt(gg, 16)},${parseInt(b, 16)},0)`));
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  blobSprites.set(color, c);
+  return c;
+}
+
+/** Average of two #rrggbb colours, lightened a little. */
+function mixHex(a, b) {
+  const ch = (h, i) => parseInt(h.slice(i, i + 2), 16);
+  return `#${[1, 3, 5].map(i => Math.round(Math.min(255, (ch(a, i) + ch(b, i)) / 2 * 1.15)).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function fuzzyStyle() {
+  const PERSIST = 0.12; // s: how long the glow lingers, which smears fast movement into a blur
+  let buf = null, bctx = null;
+  const BONES = BODY_BONES.filter(([a, b]) => a <= 28 && b <= 28);
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
+      if (!buf || buf.width !== w || buf.height !== h) {
+        buf = document.createElement('canvas');
+        buf.width = w; buf.height = h;
+        bctx = buf.getContext('2d');
+      }
+      // fade what was drawn before, then add this frame's body (amounts scaled by dt so the glow
+      // is equally bright at any frame rate)
+      const k = 1 - Math.exp(-dt / PERSIST);
+      bctx.globalCompositeOperation = 'destination-out';
+      bctx.globalAlpha = 1;
+      bctx.fillStyle = `rgba(0,0,0,${k.toFixed(3)})`;
+      bctx.fillRect(0, 0, w, h);
+      const p = lm ? project(lm, offset, w, h, mirror) : null;
+      if (p && [11, 12, 23, 24].every(i => p.v[i] >= minVis)) {
+        const pc = personColors(person);
+        const T = Math.hypot((p.x[11] + p.x[12] - p.x[23] - p.x[24]) / 2, (p.y[11] + p.y[12] - p.y[23] - p.y[24]) / 2);
+        bctx.globalCompositeOperation = 'lighter';
+        bctx.globalAlpha = Math.min(1, 0.2 * k * 6);
+        const blob = (x, y, r, color) => bctx.drawImage(blobSprite(color), x - r, y - r, 2 * r, 2 * r);
+        for (const [a, b] of BONES) {
+          if (p.v[a] < minVis || p.v[b] < minVis) continue;
+          if ((a === 11 && b === 12) || (a === 23 && b === 24)) continue; // the torso blobs cover these
+          const color = isLeft(a) && isLeft(b) ? pc.left : !isLeft(a) && !isLeft(b) ? pc.right : pc.mid;
+          const r = T * (a >= 23 ? 0.32 : 0.26);
+          const len = Math.hypot(p.x[b] - p.x[a], p.y[b] - p.y[a]);
+          const n = Math.max(2, Math.ceil(len / (r * 0.5)));
+          for (let i = 0; i <= n; i++) blob(p.x[a] + (p.x[b] - p.x[a]) * i / n, p.y[a] + (p.y[b] - p.y[a]) * i / n, r, color);
+        }
+        // torso and head in a blend of the two side colours, so they glow rather than burn white
+        const core = mixHex(pc.left, pc.right);
+        for (const [u, v] of [[0.3, 0.2], [0.7, 0.2], [0.5, 0.5], [0.3, 0.8], [0.7, 0.8]]) {
+          const tx = p.x[11] + (p.x[12] - p.x[11]) * u, ty = p.y[11] + (p.y[12] - p.y[11]) * u;
+          const bx = p.x[23] + (p.x[24] - p.x[23]) * u, by = p.y[23] + (p.y[24] - p.y[23]) * u;
+          blob(tx + (bx - tx) * v, ty + (by - ty) * v, T * 0.38, core);
+        }
+        const head = neckAndHead(p, minVis);
+        if (head) {
+          blob(head.hx, head.hy, head.r * 1.6, core);
+          blob((head.nx + head.hx) / 2, (head.ny + head.hy) / 2, head.r * 0.8, core);
+        }
+      }
+      ctx.save();
+      ctx.filter = `blur(${Math.max(2, w / 220).toFixed(1)}px)`; // extra softness where supported
+      ctx.drawImage(buf, 0, 0);
+      ctx.filter = 'none';
+      ctx.restore();
+      if (p) drawExtras(ctx, w, h, opts, 'ghost');
+    },
+    reset() { bctx?.clearRect(0, 0, buf.width, buf.height); },
+  };
+}
+
+const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle };
 
 export function createEffect(id) {
   const factory = FACTORIES[id] ?? FACTORIES[DEFAULT_STYLE];
