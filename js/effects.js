@@ -28,6 +28,7 @@ export const STYLES = [
   { id: 'fuzzy', label: 'Fuzzy blur' },
   { id: 'origami', label: 'Origami (paper)' },
   { id: 'pencil', label: 'Pencil sketch' },
+  { id: 'hoops', label: 'Hoops (hula hoop)' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -796,6 +797,113 @@ function pencilStyle() {
   };
 }
 
+// ---- hoops: rings around every limb and the torso, and a spinning hula hoop at the waist ----
+
+function hoopsStyle() {
+  // hula hoop state: centre offset from the waist on a damped spring, spin phase, spin speed
+  let off = [0, 0], vel = [0, 0], phase = 0, spin = 2 * Math.PI * 1.2, lastWaist = null;
+  const LIMBS = [[11, 13, 0.13, 3], [13, 15, 0.11, 3], [12, 14, 0.13, 3], [14, 16, 0.11, 3],
+    [23, 25, 0.17, 3], [25, 27, 0.14, 3], [24, 26, 0.17, 3], [26, 28, 0.14, 3]];
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
+      if (!lm) { lastWaist = null; return; }
+      const p = project(lm, offset, w, h, mirror);
+      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      const pc = personColors(person);
+      const T = torsoPx(p);
+      const line = Math.max(1.5, T / 32);
+      const rings = []; // { cx, cy, rx, ry, rot, color, width }
+      const ring = (cx, cy, rx, ry, rot, color, width = line) => rings.push({ cx, cy, rx, ry, rot, color, width });
+      // limb rings, perpendicular to each bone, slightly bigger at the wrists and ankles (bangles)
+      for (const [a, b, thick, n] of LIMBS) {
+        if (p.v[a] < minVis || p.v[b] < minVis) continue;
+        const ang = Math.atan2(p.y[b] - p.y[a], p.x[b] - p.x[a]);
+        const color = isLeft(a) ? pc.left : pc.right;
+        for (let k = 0; k < n; k++) {
+          const t = (k + 0.5) / n;
+          const r = T * thick * (b === 15 || b === 16 || b === 27 || b === 28 ? 0.85 + 0.3 * t : 1);
+          ring(p.x[a] + (p.x[b] - p.x[a]) * t, p.y[a] + (p.y[b] - p.y[a]) * t, r, r * 0.32, ang + Math.PI / 2, color);
+        }
+      }
+      // torso rings from the shoulders down to the waist, following the body's lean
+      const sh = [(p.x[11] + p.x[12]) / 2, (p.y[11] + p.y[12]) / 2], hp = [(p.x[23] + p.x[24]) / 2, (p.y[23] + p.y[24]) / 2];
+      const lean = Math.atan2(hp[1] - sh[1], hp[0] - sh[0]) - Math.PI / 2;
+      const shW = Math.hypot(p.x[12] - p.x[11], p.y[12] - p.y[11]), hipW = Math.hypot(p.x[24] - p.x[23], p.y[24] - p.y[23]);
+      for (let k = 0; k < 4; k++) {
+        const t = k / 3, rx = (shW * (1 - t) + hipW * 1.25 * t) * 0.62;
+        ring(sh[0] + (hp[0] - sh[0]) * t, sh[1] + (hp[1] - sh[1]) * t, rx, rx * 0.3, lean, pc.mid);
+      }
+      // neck ring and a halo over the head
+      const head = neckAndHead(p, minVis);
+      if (head) {
+        ring((head.nx + head.hx) / 2, head.ny - head.r * 0.35, head.r * 0.55, head.r * 0.17, lean, pc.mid);
+        ring(head.hx, head.hy - head.r * 1.45, head.r * 0.9, head.r * 0.26, lean, '#ffd166', line * 1.2);
+      }
+      // hula hoop physics: the waist drives a damped spring, so the hoop swings behind fast hip
+      // movement; it spins faster the more the hips move, and wobbles round the waist as it spins
+      const waist = hp;
+      let hipSpeed = 0;
+      if (lastWaist && dt > 0) {
+        const dx = waist[0] - lastWaist[0], dy = waist[1] - lastWaist[1];
+        hipSpeed = Math.hypot(dx, dy) / dt / T; // torso lengths / s
+        off[0] -= dx; off[1] -= dy; // the hoop is left behind for a moment
+      }
+      lastWaist = waist;
+      const k = (2 * Math.PI * 1.4) ** 2, damp = 2 * 0.22 * Math.sqrt(k);
+      const step = Math.min(dt, 0.05);
+      for (let i = 0; i < 2; i++) {
+        vel[i] += (-k * off[i] - damp * vel[i]) * step;
+        off[i] += vel[i] * step;
+        off[i] = clampAbs(off[i], T * 0.6);
+      }
+      spin += ((2 * Math.PI * (1.1 + 1.6 * Math.min(2, hipSpeed))) - spin) * Math.min(1, dt * 2);
+      phase = (phase + spin * dt) % (Math.PI * 2);
+      // tilt with the hip line (its slope, so it does not matter which hip is on which side)
+      const hdx = p.x[24] - p.x[23], hipSlope = Math.abs(hdx) > 1e-3 ? Math.atan((p.y[24] - p.y[23]) / hdx) : 0;
+      const R = T * 0.95, ry = R * 0.26, tilt = hipSlope * 0.6 + Math.sin(phase) * 0.06;
+      const ecc = R * 0.12; // the hoop rests against the body on one side, so its centre circles the waist
+      const hc = [waist[0] + off[0] + Math.cos(phase) * ecc, waist[1] + off[1] + Math.sin(phase) * ecc * 0.3 + T * 0.05];
+      const hoopW = line * 1.8;
+      const drawHoop = front => {
+        const N = 28;
+        for (let i = 0; i < N; i++) {
+          const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+          if ((Math.sin((a0 + a1) / 2) > 0) !== front) continue; // lower half of the ellipse is nearer
+          const stripe = Math.floor(((a0 - phase + Math.PI * 4) % (Math.PI * 2)) / (Math.PI * 2) * 8);
+          ctx.strokeStyle = stripe % 2 ? pc.left : stripe % 4 === 0 ? '#ffffff' : pc.right;
+          ctx.globalAlpha = front ? 1 : 0.45;
+          ctx.lineWidth = front ? hoopW : hoopW * 0.7;
+          ctx.beginPath();
+          ctx.ellipse(hc[0], hc[1], R, ry, tilt, a0, a1 + 0.02);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      };
+      ctx.save();
+      ctx.lineCap = 'round';
+      drawHoop(false);
+      // every ring: far half dim and thin, then near half bright
+      for (const half of [0, 1]) {
+        for (const r of rings) {
+          ctx.strokeStyle = r.color;
+          ctx.globalAlpha = half ? 1 : 0.38;
+          ctx.lineWidth = half ? r.width : r.width * 0.65;
+          ctx.beginPath();
+          ctx.ellipse(r.cx, r.cy, r.rx, Math.max(0.5, r.ry), r.rot, half ? 0 : Math.PI, half ? Math.PI : Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      drawHoop(true);
+      ctx.restore();
+      drawExtras(ctx, w, h, opts, 'full');
+    },
+    reset() { off = [0, 0]; vel = [0, 0]; lastWaist = null; },
+  };
+}
+const clampAbs = (v, m) => Math.max(-m, Math.min(m, v));
+
 // ---- fuzzy blur: a soft, out-of-focus glow of the body that smears with motion ----
 
 const blobSprites = new Map();
@@ -882,7 +990,7 @@ function fuzzyStyle() {
   };
 }
 
-const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle };
+const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle, hoops: hoopsStyle };
 
 export function createEffect(id) {
   const factory = FACTORIES[id] ?? FACTORIES[DEFAULT_STYLE];

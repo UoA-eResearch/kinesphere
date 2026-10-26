@@ -25,6 +25,7 @@ const STYLE_WORDS = [
   [/^(the )?(fuzzy( blur)?|blur|blurry)$/, 'fuzzy'],
   [/^(the )?(origami|paper)$/, 'origami'],
   [/^(the )?(pencil( sketch)?|sketch|drawing)$/, 'pencil'],
+  [/^(the )?(hoops?|hula( hoops?)?|rings)$/, 'hoops'],
 ];
 const SONG_WORDS = [
   [/sunrise|warm ?up|easy/, 'sunrise'],
@@ -152,7 +153,7 @@ export function parseCommand(text) {
 /** What to tell people they can say, grouped for the help panel and the README. */
 export const VOICE_HELP = [
   ['Recording', [['“Start recording” / “Record”', 'start after a 3-second countdown'], ['“Stop” / “Finish”', 'stop and open the dashboard'], ['“Cancel”', 'cancel the countdown']]],
-  ['Look', [['“Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy”…', 'switch overlay style'], ['“Next style”', 'the next style'], ['“Overlay off” / “Show overlay”', 'hide or show the pose'], ['“Hide video” / “Video on”', 'hide or show the camera feed'], ['“Fullscreen” / “Exit fullscreen”', ''], ['“Mirror off” / “Flip”', 'mirror view'], ['“3D view” / “Close 3D”', ''], ['“Smoothing off / normal / strong”', '']]],
+  ['Look', [['“Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy”, “Hoops”…', 'switch overlay style'], ['“Next style”', 'the next style'], ['“Overlay off” / “Show overlay”', 'hide or show the pose'], ['“Hide video” / “Video on”', 'hide or show the camera feed'], ['“Fullscreen” / “Exit fullscreen”', ''], ['“Mirror off” / “Flip”', 'mirror view'], ['“3D view” / “Close 3D”', ''], ['“Smoothing off / normal / strong”', '']]],
   ['Sandman particles', [['“Blue sand”, “Colour pink”…', 'particle colour'], ['“Gravity up / down / off / 2”, “Float”', 'gravity'], ['“Longer trails” / “Decay 5 seconds”', 'decay time'], ['“More / less momentum”', 'momentum'], ['“Reset sand”', 'defaults']]],
   ['Tracking', [['“Two people”, “Just me”', 'how many people to track'], ['“Use MultiPose / Lite / Heavy / Holistic”', 'pose model']]],
   ['Game and pages', [['“Game”, “Sessions”, “Dashboard”, “Live”', 'go to a page'], ['“Play Sunrise / Neon / Rush”', 'start a song'], ['“Stop song”', 'back to the song list'], ['“Louder” / “Quieter” / “Mute”', 'music volume']]],

@@ -32,12 +32,17 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
    sparks that fly off fast-moving joints, a constellation, **Sandman**, **Fuzzy blur**,
-   **Origami** or **Pencil sketch**. *Origami* folds the body from paper: each limb is a kite
+   **Origami**, **Pencil sketch** or **Hoops**. *Origami* folds the body from paper: each limb is a kite
    creased along the bone, with its two facets shaded by a light from the upper left, a
    four-facet torso and a faceted head, casting a soft shadow. *Pencil sketch* draws a loose
    graphite figure (doubled limb contours, sketched joints, a hatched torso) whose lines redraw
    slightly about seven times a second, like hand-drawn animation; with the camera feed hidden
-   (and in the replay) it is drawn on a sheet of paper.
+   (and in the replay) it is drawn on a sheet of paper. *Hoops* draws the body as rings: three
+   around each arm and leg segment (wider bangles at the wrists and ankles), four around the
+   torso, one round the neck and a halo above the head, each with a dim far half and a bright near
+   half. A striped hula hoop circles the waist: it spins faster the more the hips move, wobbles
+   round the waist as it spins, tilts with the hip line, and hangs on a springy link so it swings
+   behind quick hip movements.
    *Sandman* draws a body made of sand that sheds grains as you move: a trickle when still, a
    stream from fast limbs and a burst when a limb speeds up or stops sharply. Grains leave with
    the momentum of the body part that shed them (its velocity, nudged along its acceleration),
@@ -126,7 +131,7 @@ whether you were understood. Examples:
 | Say | Does |
 | --- | --- |
 | “Start recording” / “Record”, “Stop”, “Cancel” | start after the 3-second countdown, stop (the dashboard opens), cancel the countdown |
-| “Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy blur”, “Next style” | overlay style |
+| “Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy blur”, “Hoops”, “Next style” | overlay style |
 | “Overlay off”, “Hide video”, “Mirror off”, “Flip”, “3D view”, “Fullscreen”, “Smoothing strong” | display options |
 | “Blue sand”, “Gravity up / off / 2”, “Float”, “Longer trails”, “Decay 5 seconds”, “More momentum”, “Reset sand” | Sandman particles (switches to Sandman) |
 | “Two people”, “Just me”, “Use MultiPose / Lite / Heavy / Holistic” | tracking settings |
