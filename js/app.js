@@ -16,6 +16,7 @@ import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH 
 import { createGame } from './game.js';
 import { parseCommand, createVoiceControl, voiceSupported, VOICE_HELP } from './voice.js';
 import { SONGS } from './game-core.js';
+import { createSession, roomFromHash, inviteLink, MAX_GUESTS } from './multiplayer.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -38,6 +39,7 @@ const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
 const HELP_KEY = 'kinesphere:dashHelp';
 const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
+const NAME_KEY = 'kinesphere:name';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -60,6 +62,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
+  btnMp: $('#btn-mp'), mpPanel: $('#mp-panel'), mpBadge: $('#mp-badge'), joinBox: $('#join-box'), joinName: $('#join-name'),
   btnVoice: $('#btn-voice'), btnVoiceHud: $('#btn-voice-hud'), voiceChip: $('#voice-chip'), voiceHelp: $('#voice-help'),
   sandControls: $('#sand-controls'), sandHue: $('#sand-hue'), sandGravity: $('#sand-gravity'), sandGravityVal: $('#sand-gravity-val'),
   sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandMomentum: $('#sand-momentum'), sandMomentumVal: $('#sand-momentum-val'), sandReset: $('#sand-reset'),
@@ -88,6 +91,8 @@ const state = {
   charts: [], replay: null,
   liveViewer: null, liveViewerPromise: null, liveBody: { torso: 0, floor: 0 },
   xr: { vr: false, ar: false, checked: false },
+  // dance together online: remote dancers by peer id, { name, poses, aspect, at, effects, smoothers, scale, hipY, lane }
+  mp: { status: 'idle', message: '', peers: [], remotes: new Map(), pendingJoin: null, laneKey: '', myTorso: 0, myHipY: null },
 };
 
 // ---------------------------------------------------------------------------------------
@@ -391,6 +396,8 @@ async function startCamera() {
   wireXrButtons(ui.btnLiveVr, ui.btnLiveAr, ui.liveVrNote, ensureLiveViewer);
   startLoop();
   game.refresh();
+  mp.setAspect((ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
+  if (state.mp.pendingJoin) joinRoom(state.mp.pendingJoin);
 }
 
 /** Show or hide the camera feed. The stream keeps running so detection and recording continue. */
@@ -421,6 +428,7 @@ function setSmoothing(id) {
 function rebuildEffects() {
   const n = state.detector?.people ?? 1;
   state.effects = Array.from({ length: n }, () => createEffect(state.styleId));
+  for (const rem of state.mp.remotes.values()) rem.effects = [];
 }
 
 function setStyle(id) {
@@ -623,7 +631,8 @@ function startLoop() {
 }
 
 function loop(now) {
-  if (!state.stream || (state.view !== 'live' && !state.recording)) {
+  // Keep detecting while recording, or while dancing online (the others still see you on other pages).
+  if (!state.stream || (state.view !== 'live' && !state.recording && !mp.active)) {
     state.loopRunning = false;
     return;
   }
@@ -675,6 +684,7 @@ function renderOverlay(now) {
     const pose = slots?.[p] ?? null;
     effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours, videoVisible: state.showVideo });
   });
+  if (state.mp.remotes.size) drawRemoteDancers(width, height, dt, minVis);
   if (slots && state.detector.people > 1) {
     const mirrorText = state.mirrored || game.isPlaying; // the game always shows the player mirrored
     slots.forEach((pose, p) => { if (pose) drawPersonBadge(overlayCtx, pose.lm, 0, width, height, p, { mirrorText, minVis }); });
@@ -727,6 +737,8 @@ function onDetection(slots, now) {
   if (game.isOpen) game.onPoses(slots, now, (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
   else updateGesture(present, now);
   updateFraming(present, now);
+  if (mp.active) mp.sendPoses(present.map(pose => pose.lm), now);
+  if (present[0]) trackMyBody(present[0].lm);
   updateStatus(present.length);
   if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
 }
@@ -1714,6 +1726,250 @@ ui.views.sessions.addEventListener('click', async e => {
 });
 
 // ---------------------------------------------------------------------------------------
+// Dance together online: share a link; everyone sees everyone's avatar (see multiplayer.js).
+
+const mp = createSession({ onPeers: onMpPeers, onPose: onMpPose, onStatus: onMpStatus });
+
+function myName() {
+  return (localStorage.getItem(NAME_KEY) || '').trim() || 'Dancer';
+}
+function setMyName(n) {
+  const name = String(n || '').trim().slice(0, 24);
+  if (name) localStorage.setItem(NAME_KEY, name); else localStorage.removeItem(NAME_KEY);
+  mp.setName(myName());
+}
+
+function onMpStatus({ state: st, message }) {
+  state.mp.status = st;
+  state.mp.message = message;
+  if (st === 'ended') {
+    state.mp.pendingJoin = null;
+    if (roomFromHash()) history.replaceState(null, '', location.pathname + location.search);
+    if (message) toast(message, 7000);
+  }
+  if (st === 'joined') toast('Connected: you can see each other’s avatars now.', 4000);
+  if (st === 'hosting' || st === 'joined') startLoop();
+  renderMpPanel();
+}
+
+function onMpPeers(peers) {
+  const before = new Set(state.mp.peers.filter(p => !p.self).map(p => p.id));
+  state.mp.peers = peers;
+  for (const p of peers) {
+    if (p.self) continue;
+    const rem = state.mp.remotes.get(p.id);
+    if (rem) rem.name = p.name;
+    if (!before.has(p.id) && p.name && p.name !== 'Joining…' && mp.role === 'host') toast(`${p.name} joined`, 3000);
+  }
+  ui.mpBadge.hidden = !mp.active || peers.length < 2;
+  ui.mpBadge.textContent = `👥 ${peers.length} dancing`;
+  renderMpPanel();
+}
+
+function onMpPose(id, poses, aspect) {
+  const remotes = state.mp.remotes;
+  if (!poses) { remotes.delete(id); return; }
+  let rem = remotes.get(id);
+  if (!rem) {
+    rem = { name: state.mp.peers.find(p => p.id === id)?.name ?? 'Dancer', effects: [], smoothers: createSmoother(state.smoother.id, 6), scale: 0, hipY: null, lane: null };
+    remotes.set(id, rem);
+  }
+  rem.poses = poses;
+  rem.aspect = aspect;
+  rem.at = performance.now();
+}
+
+/** Remember my size and hip height (in picture-height units), which remote dancers are matched to. */
+function trackMyBody(lm) {
+  const v = i => lm[i * 4 + 3] >= 0.5;
+  if (![11, 12, 23, 24].every(v)) return;
+  const aspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
+  const sx = (lm[44] + lm[48]) / 2, sy = (lm[45] + lm[49]) / 2, hx = (lm[92] + lm[96]) / 2, hy = (lm[93] + lm[97]) / 2;
+  const torso = Math.hypot((sx - hx) * aspect, sy - hy);
+  state.mp.myTorso = state.mp.myTorso ? state.mp.myTorso * 0.95 + torso * 0.05 : torso;
+  state.mp.myHipY = state.mp.myHipY == null ? hy : state.mp.myHipY * 0.95 + hy * 0.05;
+  state.mp.myHipX = hx;
+}
+
+/**
+ * Give every dancer a lane across the picture: mine is the one I am standing in, the others go
+ * to the remaining lanes. Reassigned only when someone joins or leaves, so nobody jumps around.
+ */
+function assignLanes(ids) {
+  const key = ids.join('|');
+  if (key === state.mp.laneKey) return;
+  state.mp.laneKey = key;
+  const total = ids.length + 1;
+  const centres = Array.from({ length: total }, (_, i) => (i + 0.5) / total);
+  const myX = state.mp.myHipX ?? 0.5;
+  const mine = centres.reduce((best, c, i) => (Math.abs(c - myX) < Math.abs(centres[best] - myX) ? i : best), 0);
+  const free = centres.filter((_, i) => i !== mine).sort((a, b) => Math.abs(a - myX) - Math.abs(b - myX));
+  ids.forEach((id, k) => { state.mp.remotes.get(id).lane = free[k]; });
+}
+
+/**
+ * Place a remote dancer's pose in my picture: scaled so their torso matches mine, hips at my hip
+ * height, and their own picture's centre moved to their lane, so their movement around their room
+ * shows as movement around their lane.
+ */
+function placeRemotePose(lm, rem, myAspect) {
+  const ra = rem.aspect || 16 / 9;
+  const has = i => lm[i * 4 + 3] >= 0.3;
+  const hipOk = has(23) && has(24), shOk = has(11) && has(12);
+  if (!hipOk && !shOk) return null;
+  const hx = hipOk ? (lm[92] + lm[96]) / 2 : (lm[44] + lm[48]) / 2;
+  const hy = hipOk ? (lm[93] + lm[97]) / 2 : (lm[45] + lm[49]) / 2 + 0.25;
+  if (hipOk && shOk) {
+    const torso = Math.hypot(((lm[44] + lm[48]) / 2 - hx) * ra, (lm[45] + lm[49]) / 2 - hy);
+    const target = clamp((state.mp.myTorso || 0.25) / Math.max(0.02, torso), 0.35, 2.5);
+    rem.scale = rem.scale ? rem.scale * 0.9 + target * 0.1 : target;
+  }
+  const s = rem.scale || 1;
+  const targetHip = state.mp.myHipY ?? hy;
+  rem.hipY = rem.hipY == null ? targetHip : rem.hipY * 0.9 + targetHip * 0.1;
+  const out = new Float32Array(132);
+  for (let i = 0; i < 33; i++) {
+    out[i * 4] = rem.lane + ((lm[i * 4] - 0.5) * ra * s) / myAspect;
+    out[i * 4 + 1] = rem.hipY + (lm[i * 4 + 1] - hy) * s;
+    out[i * 4 + 3] = lm[i * 4 + 3];
+  }
+  return out;
+}
+
+function drawRemoteDancers(width, height, dt, minVis) {
+  const now = performance.now();
+  const myAspect = width / height;
+  const live = [...state.mp.remotes].filter(([, r]) => r.poses && now - r.at < 1500).map(([id]) => id);
+  if (!live.length) return;
+  assignLanes(live);
+  const localPeople = state.detector?.people ?? 1;
+  live.forEach((id, k) => {
+    const rem = state.mp.remotes.get(id);
+    rem.poses.forEach((raw, p) => {
+      const placed = placeRemotePose(raw, rem, myAspect);
+      if (!placed) { rem.smoothers.reset(p); return; }
+      const shown = rem.smoothers.apply(placed, 0, p, dt);
+      const colour = localPeople + k + p; // colours after the local dancers'
+      rem.effects[p] ??= createEffect(state.styleId);
+      rem.effects[p].draw(overlayCtx, shown, 0, width, height, dt, { person: colour, minVis: Math.min(minVis, 0.4), videoVisible: state.showVideo });
+      if (p === 0) drawNameTag(shown, width, height, rem.name, personColors(colour).left);
+    });
+  });
+}
+
+function drawNameTag(lm, w, h, name, colour) {
+  const x = lm[0] * w, y = Math.min(lm[1], lm[45], lm[49]) * h - h * 0.07;
+  const fs = Math.max(12, Math.round(h / 34));
+  overlayCtx.save();
+  overlayCtx.translate(x, Math.max(fs, y));
+  if (state.mirrored || game.isPlaying) overlayCtx.scale(-1, 1); // the canvas is shown mirrored: keep text readable
+  overlayCtx.font = `600 ${fs}px system-ui, sans-serif`;
+  const tw = overlayCtx.measureText(name).width;
+  overlayCtx.fillStyle = 'rgba(0,0,0,0.6)';
+  overlayCtx.beginPath();
+  overlayCtx.roundRect?.(-tw / 2 - fs * 0.6, -fs * 0.85, tw + fs * 1.2, fs * 1.5, fs * 0.75);
+  overlayCtx.fill();
+  overlayCtx.fillStyle = '#fff';
+  overlayCtx.textAlign = 'center';
+  overlayCtx.textBaseline = 'middle';
+  overlayCtx.fillText(name, 0, -fs * 0.1);
+  overlayCtx.fillStyle = colour;
+  overlayCtx.beginPath();
+  overlayCtx.arc(-tw / 2 - fs * 0.25, -fs * 0.1, fs * 0.22, 0, Math.PI * 2);
+  overlayCtx.fill();
+  overlayCtx.restore();
+}
+
+async function hostRoom() {
+  try {
+    await mp.host(myName(), (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
+  } catch { /* reported through onMpStatus */ }
+}
+
+async function joinRoom(code) {
+  if (ui.joinName.value.trim()) setMyName(ui.joinName.value);
+  state.mp.pendingJoin = null;
+  ui.joinBox.hidden = true;
+  ui.mpPanel.hidden = false;
+  ui.btnMp.setAttribute('aria-expanded', 'true');
+  try {
+    await mp.join(code, myName(), (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
+  } catch { /* reported through onMpStatus */ }
+}
+
+/** Arriving through an invite link: ask for a name and join once the camera is on. */
+function checkInvite() {
+  const code = roomFromHash();
+  if (!code || (mp.active && mp.code === code)) return;
+  state.mp.pendingJoin = code;
+  if (state.stream) { joinRoom(code); return; }
+  setView('live');
+  $('#placeholder-title').textContent = 'Join a dance session';
+  $('#placeholder-text').textContent = 'You were invited to dance together online. Start your camera to join: you will see each other’s avatars. Only pose landmarks are shared, never video.';
+  ui.joinBox.hidden = false;
+  ui.joinName.value = localStorage.getItem(NAME_KEY) || '';
+  ui.btnCamera.textContent = 'Start camera and join';
+}
+
+function renderMpPanel() {
+  const el = ui.mpPanel;
+  if (el.hidden) return;
+  const st = state.mp.status;
+  const peers = state.mp.peers;
+  const people = peers.length ? `<ul class="mp-people">${peers.map((p, i) => `<li><i style="background:${personColors(p.self ? 0 : (state.detector?.people ?? 1) + i - 1).left}"></i>${escapeHtml(p.name)}${p.self ? ' <small>(you)</small>' : p.host ? ' <small>(host)</small>' : ''}</li>`).join('')}</ul>` : '';
+  const nameRow = `<div class="mp-row"><label for="mp-name">Your name</label><input type="text" id="mp-name" maxlength="24" autocomplete="nickname" spellcheck="false" value="${escapeHtml(localStorage.getItem(NAME_KEY) || '')}" placeholder="Dancer"></div>`;
+  const camNote = state.stream ? '' : '<p class="mp-warn">Start your camera so the others can see your avatar.</p>';
+  let body;
+  if (st === 'connecting') {
+    body = `<h3>Dance together online</h3><p>${escapeHtml(state.mp.message || 'Connecting…')}</p><div class="mp-row"><button class="btn btn-sm" data-mp="leave">Cancel</button></div>`;
+  } else if (mp.active && mp.role === 'host') {
+    const link = inviteLink(mp.code);
+    body = `<h3>Invite people to dance with you</h3>
+      <p>Send this link to up to ${MAX_GUESTS} people. When they open it and start their camera, their avatars appear next to yours, and they see yours.</p>
+      <div class="mp-row"><input type="text" class="mp-link" id="mp-link" readonly value="${escapeHtml(link)}" aria-label="Invite link">
+        <button class="btn btn-sm btn-primary" data-mp="copy">Copy link</button>${navigator.share ? '<button class="btn btn-sm" data-mp="share">Share…</button>' : ''}</div>
+      ${camNote}
+      <p>${peers.length > 1 ? `${peers.length} dancing:` : 'Waiting for someone to join…'}</p>${people}
+      ${nameRow}
+      <div class="mp-row"><button class="btn btn-sm btn-danger" data-mp="leave">End session</button></div>`;
+  } else if (mp.active) {
+    body = `<h3>Dancing together</h3><p>${peers.length > 1 ? `${peers.length} dancing:` : 'Connecting…'}</p>${people}${camNote}${nameRow}
+      <div class="mp-row"><button class="btn btn-sm btn-danger" data-mp="leave">Leave</button></div>`;
+  } else {
+    body = `<h3>Dance together online</h3>
+      <p>Create a link and send it to someone. When they open it and start their camera, you see their avatar next to yours, and they see yours, in whatever style each of you picks. Up to ${MAX_GUESTS + 1} dancers.</p>
+      ${nameRow}
+      <div class="mp-row"><button class="btn btn-sm btn-primary" data-mp="host">Create invite link</button></div>
+      <p class="fine">Only pose landmarks are sent (about 8 KB/s per dancer), never video, directly between browsers over an encrypted WebRTC connection. A free PeerJS server introduces the browsers (it sees the room code and your IP address), and PeerJS's relay servers carry the encrypted data when a direct connection is impossible. The people you dance with can see your IP address, as with any video call. Anyone with the link can join until you end the session.</p>`;
+  }
+  el.innerHTML = body;
+  el.querySelector('#mp-name')?.addEventListener('change', e => { setMyName(e.target.value); renderMpPanel(); });
+  el.querySelectorAll('[data-mp]').forEach(btn => btn.addEventListener('click', async () => {
+    const a = btn.dataset.mp;
+    if (a === 'host') { const n = el.querySelector('#mp-name'); if (n) setMyName(n.value); hostRoom(); }
+    if (a === 'leave') mp.leave();
+    if (a === 'copy') {
+      const link = el.querySelector('#mp-link');
+      try { await navigator.clipboard.writeText(link.value); toast('Invite link copied'); } catch { link.select(); document.execCommand?.('copy'); toast('Invite link selected: copy it with Ctrl+C / ⌘C'); }
+    }
+    if (a === 'share') navigator.share?.({ title: 'Dance with me on Kinesphere', text: 'Join me to dance together:', url: inviteLink(mp.code) }).catch(() => {});
+  }));
+}
+
+function toggleMpPanel(open = ui.mpPanel.hidden) {
+  ui.mpPanel.hidden = !open;
+  ui.btnMp.setAttribute('aria-expanded', String(open));
+  if (open) { renderMpPanel(); ui.mpPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+}
+
+function initMultiplayer() {
+  ui.btnMp.addEventListener('click', () => toggleMpPanel());
+  window.addEventListener('hashchange', checkInvite);
+  window.addEventListener('pagehide', () => { if (mp.active) mp.leave(); });
+  checkInvite();
+}
+
+// ---------------------------------------------------------------------------------------
 // Voice control: spoken commands change settings hands-free (Web Speech API).
 
 const voice = createVoiceControl({ onPhrase: handlePhrase, onState: onVoiceState });
@@ -1786,6 +2042,15 @@ function runVoiceCommand(cmd) {
   const cancelCountdown = () => { state.countdown = null; ui.countdown.hidden = true; };
   switch (cmd.type) {
     case 'voice:off': voice.disable(); return 'Voice control off';
+    case 'mp:invite':
+      if (state.view !== 'live') setView('live');
+      toggleMpPanel(true);
+      if (!mp.active) { hostRoom(); return 'Creating an invite link'; }
+      return 'Invite link is in the Dance together panel';
+    case 'mp:leave':
+      if (!mp.active) return 'Not in an online session';
+      mp.leave();
+      return 'Left the online session';
     case 'help:show':
       if (state.view !== 'live') return 'Say “live view”, then “help”, to see the commands';
       showVoiceHelp(true);
@@ -1964,6 +2229,7 @@ function init() {
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   initSandControls();
   initVoice();
+  initMultiplayer();
   ui.btnStyle.addEventListener('click', nextStyle);
   setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));

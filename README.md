@@ -120,6 +120,36 @@ over passthrough where the browser supports `immersive-ar`. A controller trigger
 in the replay. The buttons only appear when the browser reports headset support; everything else
 in the app works without VR. three.js is loaded from the CDN the first time a 3D view is opened.
 
+### Dance together online
+
+Press **👥 Dance together** under the preview, enter your name and **Create invite link**, then
+**Copy link** (or **Share…** on phones) and send it to up to five people. When someone opens the
+link, the app asks for their name and **Start camera and join**; from then on everyone sees
+everyone's avatar on their own screen, with a name tag, drawn in the overlay style *they* have
+chosen. A badge in the corner of the preview shows how many are dancing, and the panel lists
+them. **Leave** (a guest) or **End session** (the host) disconnects; when the host ends it,
+everyone is told. Voice commands: “invite” and “leave session”.
+
+* **Side by side.** Every dancer gets a lane across the picture. You stay where you are (your
+  avatar still follows your camera), and the others are placed in the remaining lanes, so two
+  dancers appear side by side. Each remote dancer is scaled so their torso matches yours and
+  stands with their hips at your hip height, whatever their camera distance or picture shape;
+  moving around their room moves them around their lane.
+* **How it connects.** There is no Kinesphere server. Browsers connect directly to each other
+  with WebRTC data channels via [PeerJS](https://peerjs.com/) 1.5.5 (loaded from the CDN only when
+  you use this). PeerJS's free public signalling server introduces the browsers using the room
+  code in the link; if a direct connection is impossible (strict firewalls), PeerJS's TURN relay
+  servers carry the encrypted data. The host's browser passes each guest's poses on to the other
+  guests, so the session lasts as long as the host stays. To use your own PeerJS server, add
+  `?signal=wss://your.server[:port]/path` to the page address; invite links keep it.
+* **What is sent.** Only pose landmarks (x, y and visibility of the 33 points for each tracked
+  person), up to 20 times a second: about 8 KB/s per dancer. Never video or audio. WebRTC data is
+  always encrypted end to end. As in any video call, participants' browsers learn each other's IP
+  addresses, and the signalling server sees the room code and IP addresses. Anyone with the link
+  can join while the session is open; room codes are 10 random characters.
+* Recording, the dashboard and the game still work during a session (the others keep seeing you
+  while you look at the dashboard). Recordings contain only your own dancing.
+
 ### Voice control (hands-free)
 
 Press **🎤 Voice control** under the preview (or **🎤 Voice** in its corner, or <kbd>M</kbd>) and
@@ -210,13 +240,16 @@ remembered.
 
 ## Data and privacy
 
-* Nothing is uploaded anywhere. The only network requests are for the pose libraries and model
+* Nothing is uploaded anywhere unless you choose to dance together online or use voice control (below). The only network requests are for the pose libraries and model
   files (jsDelivr, Google's model storage and, for MoveNet, TF Hub / Kaggle) and the app's own
   static files.
 * Downloaded model files (MediaPipe's WebAssembly runtime and `.task` models, MoveNet weights)
   are stored in the browser's Cache Storage under `kinesphere-models-v1`, between 5 and 45 MB
   depending on which models you have used. Clear them from the **?** help panel or by clearing
   the site's data.
+* **Dancing together online** sends your pose landmarks (never video) to the people in the
+  session, directly over encrypted WebRTC; see *Dance together online* above for what the PeerJS
+  signalling and relay servers see.
 * **Voice control** is off until you turn it on, and is not remembered between visits. It uses the
   browser's own speech recognition. Where the browser can transcribe on the device (recent Chrome
   with its on-device speech pack) the app uses that, and starts downloading the pack in the
@@ -316,6 +349,7 @@ js/viewer3d.js    three.js 3D figure viewer with WebXR (VR / AR) sessions
 js/game.js        game mode: song menu, Web Audio music, coach and lane rendering, scoring loop
 js/game-core.js   game logic without DOM or audio: moves, songs, choreography, pose matching
 js/voice.js       voice control: spoken-phrase parser and Web Speech API listener
+js/multiplayer.js dance together online: PeerJS (WebRTC) session, pose packing, invite links
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export

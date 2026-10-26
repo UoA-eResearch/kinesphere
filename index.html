@@ -43,6 +43,7 @@
           <div class="hud">
             <div class="hud-top">
               <span id="rec-badge" class="rec-badge" hidden><span class="dot"></span>REC <span id="rec-time" class="mono">0:00</span></span>
+              <span id="mp-badge" class="mp-badge" hidden title="Dancers in this online session"></span>
               <span id="fps" class="fps"></span>
               <div class="hud-tools">
                 <button id="hud-record" class="hud-btn fs-only" disabled>● Record</button>
@@ -65,8 +66,9 @@
           <div id="voice-chip" class="voice-chip" role="status" aria-live="polite" hidden></div>
           <div id="voice-help" class="voice-help" role="dialog" aria-label="Voice commands" hidden></div>
           <div id="stage-placeholder" class="stage-placeholder">
-            <h1>Record a dance session</h1>
-            <p>Your webcam feed and detected pose are shown here. Video never leaves your device; only pose landmarks are recorded.</p>
+            <h1 id="placeholder-title">Record a dance session</h1>
+            <p id="placeholder-text">Your webcam feed and detected pose are shown here. Video never leaves your device; only pose landmarks are recorded.</p>
+            <label id="join-box" class="join-box" hidden>Your name <input id="join-name" type="text" maxlength="24" autocomplete="nickname" spellcheck="false"></label>
             <button id="btn-camera" class="btn btn-primary">Start camera</button>
             <div id="camera-status" class="placeholder-status" hidden></div>
             <div id="camera-error" class="error-box" hidden></div>
@@ -106,6 +108,7 @@
         <label class="select" title="How many dancers to track at once. Each extra person costs speed, and the dashboard shows one tab per person.">People
           <select id="sel-people" aria-label="Number of people to track"></select>
         </label>
+        <button id="btn-mp" class="btn btn-sm" aria-expanded="false" aria-controls="mp-panel" title="Invite someone to dance with you online: you see each other's avatars">👥 Dance together</button>
         <button id="btn-voice" class="btn btn-sm voice-btn" aria-pressed="false" title="Change settings hands-free by speaking (M). Say “help” for the list of commands." hidden>🎤 Voice control</button>
         <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="About these settings">?</button>
       </div>
@@ -121,6 +124,7 @@
           <input type="range" id="sand-momentum" min="0" max="2" step="0.1" aria-label="Particle momentum"> <span id="sand-momentum-val" class="mono"></span></label>
         <button id="sand-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
       </div>
+      <section id="mp-panel" class="mp-panel" aria-label="Dance together online" hidden></section>
       <p id="setting-help" class="setting-help"></p>
       <details id="help-panel" class="help-panel">
         <summary>About the model and people settings</summary>
@@ -138,6 +142,8 @@
           <dd>How many dancers to track at the same time (up to six). Choosing more than one person switches the model to MoveNet MultiPose, the best at keeping people apart (its tracker remembers who is who when dancers cross); you can still pick a MediaPipe model afterwards for 3D depth. Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
           <dt>3D view and VR</dt>
           <dd>The <em>3D view</em> button (live, and in the replay) shows the tracked skeleton as a life-size figure you can orbit with the mouse or a finger. Depth comes from MediaPipe's per-joint z estimate, so MoveNet sessions appear flat; that estimate is noisy and exaggerated, so the <em>Depth</em> slider shows 35% of it by default (0% gives a flat figure, 100% the raw estimate). On a WebXR-capable browser with a headset connected (Meta Quest Browser, or Chrome/Edge with a PC headset) <em>Enter VR</em> puts the figure on the floor in front of you at life size, and <em>Enter AR</em> does the same over passthrough where supported; a controller trigger toggles play/pause in the replay. VR is optional and the buttons only appear when the browser reports headset support.</dd>
+          <dt>Dance together online</dt>
+          <dd><b>👥 Dance together</b> creates a link to send to up to five people. When they open it and start their camera, everyone sees everyone's avatar on their own screen, side by side and scaled to the same size, in the style each person picks. Only pose landmarks are sent (never video), directly between browsers over an encrypted WebRTC connection; a free PeerJS server introduces the browsers and PeerJS relays carry the encrypted data when a direct connection is impossible. Participants can see each other's IP address, as in any video call. Anyone with the link can join until the host ends the session. Recordings contain only your own dancing.</dd>
           <dt>Voice control</dt>
           <dd id="voice-help-text">Press <b>🎤 Voice control</b> (or <kbd>M</kbd>) and speak to change settings hands-free: say <em>“help”</em> to see every command on screen. It uses your browser's speech recognition. When the browser can transcribe on this device it does; otherwise your voice is sent to the browser maker's speech service (Google for Chrome, Apple for Safari, Microsoft for Edge) to be turned into text. Video never leaves your device either way. Firefox does not support speech recognition.
             <span id="voice-commands"></span></dd>
