@@ -583,6 +583,23 @@ export function createGame(deps) {
       restorePip();
     },
     refresh() { if (open && phase === 'menu') renderMenu(); },
+    /** Start a song by id (from the menu or results, or replacing the song playing). */
+    play(id) {
+      if (!open || !SONGS.some(s => s.id === id)) return false;
+      if (phase === 'playing') stopSong();
+      startSong(id);
+      return deps.isReady();
+    },
+    /** Change the music volume by `delta` (or set it with absolute), returns the new volume 0..1. */
+    adjustVolume(delta, absolute = false) {
+      const cur = Number(localStorage.getItem(VOLUME_KEY) ?? 0.7);
+      const v = clamp(absolute ? delta : cur + delta, 0, 1);
+      localStorage.setItem(VOLUME_KEY, String(v));
+      run?.music.setVolume(v);
+      const slider = menu.querySelector('[data-g="volume"]');
+      if (slider) slider.value = String(v);
+      return v;
+    },
     back,
     onPoses,
     get isOpen() { return open; },

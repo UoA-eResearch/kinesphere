@@ -14,6 +14,8 @@ import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAN
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
 import { createGame } from './game.js';
+import { parseCommand, createVoiceControl, voiceSupported, VOICE_HELP } from './voice.js';
+import { SONGS } from './game-core.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -35,6 +37,7 @@ const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
 const HELP_KEY = 'kinesphere:dashHelp';
+const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -57,6 +60,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
+  btnVoice: $('#btn-voice'), btnVoiceHud: $('#btn-voice-hud'), voiceChip: $('#voice-chip'), voiceHelp: $('#voice-help'),
   sandControls: $('#sand-controls'), sandHue: $('#sand-hue'), sandGravity: $('#sand-gravity'), sandGravityVal: $('#sand-gravity-val'),
   sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandMomentum: $('#sand-momentum'), sandMomentumVal: $('#sand-momentum-val'), sandReset: $('#sand-reset'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
@@ -440,13 +444,19 @@ function syncSandUI() {
   ui.sandDecayVal.textContent = `${sandSettings.decay.toFixed(1)} s`;
   ui.sandControls.style.setProperty('--sand', `hsl(${sandSettings.hue}, 70%, 65%)`);
 }
+/** Change sandman settings (clamped to the sliders' ranges), remember them and update the sliders. */
+const SAND_RANGES = { hue: [0, 360], gravity: [-1, 3], decay: [0.3, 8], momentum: [0, 2] };
+function applySand(patch) {
+  const clean = {};
+  for (const [k, v] of Object.entries(patch)) if (SAND_RANGES[k] && Number.isFinite(v)) clean[k] = clamp(v, ...SAND_RANGES[k]);
+  setSandSettings(clean);
+  localStorage.setItem(SAND_KEY, JSON.stringify(sandSettings));
+  syncSandUI();
+}
+
 function initSandControls() {
   try { setSandSettings(JSON.parse(localStorage.getItem(SAND_KEY)) ?? {}); } catch { /* defaults */ }
-  const update = () => {
-    setSandSettings({ hue: Number(ui.sandHue.value), gravity: Number(ui.sandGravity.value), decay: Number(ui.sandDecay.value), momentum: Number(ui.sandMomentum.value) });
-    localStorage.setItem(SAND_KEY, JSON.stringify(sandSettings));
-    syncSandUI();
-  };
+  const update = () => applySand({ hue: Number(ui.sandHue.value), gravity: Number(ui.sandGravity.value), decay: Number(ui.sandDecay.value), momentum: Number(ui.sandMomentum.value) });
   for (const el of [ui.sandHue, ui.sandGravity, ui.sandDecay, ui.sandMomentum]) el.addEventListener('input', update);
   ui.sandReset.addEventListener('click', () => { setSandSettings(SAND_DEFAULTS); localStorage.removeItem(SAND_KEY); syncSandUI(); });
   syncSandUI();
@@ -686,9 +696,10 @@ function onDetection(slots, now) {
   if (state.countdown) {
     const left = state.countdown.endsAt - now;
     if (left <= 0) {
+      const trigger = state.countdown.trigger ?? 'pose';
       state.countdown = null;
       ui.countdown.hidden = true;
-      startRecording('pose', now);
+      startRecording(trigger, now);
     } else {
       ui.countdown.hidden = false;
       ui.countdown.textContent = String(Math.ceil(left / 1000));
@@ -900,7 +911,7 @@ function renderDashboard() {
 
   const people = session.people || 1;
   const fpsText = a.ok ? ` · ${a.fps.toFixed(0)} fps` : '';
-  const triggerText = { pose: 'started by pose', button: 'started by button', game: 'danced in the game' }[session.trigger] ?? '';
+  const triggerText = { pose: 'started by pose', button: 'started by button', voice: 'started by voice', game: 'danced in the game' }[session.trigger] ?? '';
   const comparing = Boolean(state.current.compare);
   const tabs = `
     <div class="person-tabs" role="tablist" aria-label="Person">
@@ -1703,6 +1714,177 @@ ui.views.sessions.addEventListener('click', async e => {
 });
 
 // ---------------------------------------------------------------------------------------
+// Voice control: spoken commands change settings hands-free (Web Speech API).
+
+const voice = createVoiceControl({ onPhrase: handlePhrase, onState: onVoiceState });
+let voiceChipTimer = 0;
+
+function onVoiceState({ listening, local, error }) {
+  for (const btn of [ui.btnVoice, ui.btnVoiceHud]) {
+    btn.classList.toggle('is-listening', Boolean(listening));
+    btn.setAttribute('aria-pressed', String(Boolean(listening || voice.on)));
+  }
+  ui.btnVoice.textContent = listening ? '🎤 Voice: listening' : '🎤 Voice control';
+  ui.btnVoiceHud.textContent = listening ? '🎤 Voice: on' : '🎤 Voice: off';
+  const where = local ? 'transcribed on this device' : 'transcribed by your browser\'s speech service';
+  ui.btnVoice.title = listening ? `Listening (${where}). Say “help” for commands, “stop listening” or press M to turn off.` : 'Change settings hands-free by speaking (M). Say “help” for the list of commands.';
+  if (error) toast(error, 8000);
+}
+
+async function toggleVoice() {
+  if (voice.on) { voice.disable(); showVoiceChip(null, 'Voice control off'); return; }
+  if (!voice.supported) { toast('This browser has no speech recognition. Try Chrome, Edge or Safari.', 6000); return; }
+  if (localStorage.getItem(VOICE_CONSENT_KEY) !== 'yes' && !(await voice.canRunLocally())) {
+    const ok = confirm('Voice control uses your browser\'s speech recognition. This browser cannot transcribe on the device, so while voice control is on your voice is sent to its speech service (Google for Chrome, Apple for Safari, Microsoft for Edge) to be turned into text. Video never leaves your device.\n\nTurn on voice control?');
+    if (!ok) return;
+    localStorage.setItem(VOICE_CONSENT_KEY, 'yes');
+  }
+  await voice.enable();
+  showVoiceChip(null, 'Listening: say “help” for commands');
+}
+
+function showVoiceChip(heard, message, miss = false) {
+  if (state.view !== 'live') { // the chip lives on the camera stage; elsewhere use the toast
+    if (!miss) toast(heard ? `“${heard}” → ${message}` : message, 2500);
+    return;
+  }
+  const chip = ui.voiceChip;
+  chip.innerHTML = `${heard ? `<q>${escapeHtml(heard)}</q>${message ? ' → ' : ''}` : '🎤 '}${message ? `<b>${escapeHtml(message)}</b>` : ''}`;
+  chip.classList.toggle('is-miss', miss);
+  chip.hidden = false;
+  clearTimeout(voiceChipTimer);
+  voiceChipTimer = setTimeout(() => { chip.hidden = true; }, miss ? 1500 : 2800);
+}
+
+function voiceHelpHTML(compact = false) {
+  return VOICE_HELP.map(([group, items]) => `<div>${compact ? `<h4>${escapeHtml(group)}</h4>` : `<h3>${escapeHtml(group)}</h3>`}<ul>${items.map(([say, does]) => `<li>${escapeHtml(say)}${does ? ` <span>${escapeHtml(does)}</span>` : ''}</li>`).join('')}</ul></div>`).join('');
+}
+function showVoiceHelp(on) {
+  ui.voiceHelp.hidden = !on;
+  if (on) {
+    ui.voiceHelp.innerHTML = `<button class="hud-btn vh-close" type="button" aria-label="Close">✕</button><h2>Say…</h2><div class="voice-help-grid">${voiceHelpHTML()}</div>`;
+    ui.voiceHelp.querySelector('.vh-close').onclick = () => showVoiceHelp(false);
+  }
+}
+
+/** Try each transcript the recogniser offers until one is a command. */
+function handlePhrase(alternatives) {
+  for (const text of alternatives) {
+    const cmd = parseCommand(text);
+    if (!cmd) continue;
+    let msg;
+    try { msg = runVoiceCommand(cmd); } catch (err) { console.error(err); msg = 'Could not do that'; }
+    showVoiceChip(text, msg);
+    return;
+  }
+  showVoiceChip(alternatives[0], 'not a command (say “help”)', true);
+}
+
+const onOffText = on => (on ? 'on' : 'off');
+function runVoiceCommand(cmd) {
+  const v = cmd.value;
+  const cancelCountdown = () => { state.countdown = null; ui.countdown.hidden = true; };
+  switch (cmd.type) {
+    case 'voice:off': voice.disable(); return 'Voice control off';
+    case 'help:show':
+      if (state.view !== 'live') return 'Say “live view”, then “help”, to see the commands';
+      showVoiceHelp(true);
+      return 'Voice commands';
+    case 'help:hide': showVoiceHelp(false); return 'Closed';
+    case 'record:start':
+      if (state.view !== 'live' || game.isOpen) return 'Recording starts from the Live view';
+      if (!state.detector) return 'Start the camera first';
+      if (state.recording) return 'Already recording';
+      state.countdown = { endsAt: performance.now() + COUNTDOWN_MS, trigger: 'voice' };
+      return 'Recording in 3 seconds';
+    case 'record:cancel':
+      if (state.countdown) { cancelCountdown(); return 'Countdown cancelled'; }
+      return 'Nothing to cancel';
+    case 'stop':
+      if (game.isPlaying) { game.back(); return 'Song stopped'; }
+      if (state.countdown) { cancelCountdown(); return 'Countdown cancelled'; }
+      if (state.recording) { stopRecording(); return 'Recording stopped'; }
+      return 'Not recording';
+    case 'game:stop':
+      if (game.isPlaying) { game.back(); return 'Song stopped'; }
+      return 'No song is playing';
+    case 'game:play': {
+      if (!game.isOpen) setView('game');
+      if (!(state.stream && state.detector)) return 'Start the camera first';
+      if (state.recording && !game.isPlaying) return 'Stop the recording first';
+      game.play(v);
+      return `Playing ${SONGS.find(sg => sg.id === v)?.title ?? v}`;
+    }
+    case 'game:volume': return `Music volume ${fmtPct(game.adjustVolume(v, cmd.absolute))}`;
+    case 'nav':
+      if (v === 'dashboard') {
+        if (!state.current) return 'No session is open yet';
+        setView('dashboard');
+        return 'Dashboard';
+      }
+      if (state.recording && v !== 'live') return 'Stop the recording first';
+      setView(v);
+      return { live: 'Live view', game: 'Game', sessions: 'Sessions' }[v];
+    case 'fullscreen': {
+      const want = v ?? !document.fullscreenElement;
+      if (!want) { if (document.fullscreenElement) document.exitFullscreen?.(); return 'Fullscreen off'; }
+      if (document.fullscreenElement) return 'Already fullscreen';
+      // Browsers only allow entering fullscreen from a click or key press.
+      ui.stage.requestFullscreen?.().catch(() => showVoiceChip(null, 'Fullscreen needs a click or the F key (a browser rule)'));
+      return 'Fullscreen';
+    }
+    case 'overlay': { const on = v ?? !state.showOverlay; setOverlay(on); return `Overlay ${onOffText(on)}`; }
+    case 'video': setVideo(v); return `Camera feed ${onOffText(v)}`;
+    case 'mirror': { const on = v ?? !state.mirrored; applyLiveMirror(on); return `Mirror view ${onOffText(on)}`; }
+    case 'view3d':
+      if (!state.stream) return 'Start the camera first';
+      if (Boolean(state.liveViewer) !== v) toggleLiveViewer();
+      return `3D view ${onOffText(v)}`;
+    case 'smoothing': setSmoothing(v); return `Smoothing: ${SMOOTHING_LEVELS.find(l => l.id === v)?.label ?? v}`;
+    case 'model':
+      if (state.recording) return 'Can’t change the model while recording';
+      ui.selModel.value = v;
+      onSettingsChanged();
+      return `Model: ${engineInfo(v).label}`;
+    case 'people':
+      if (state.recording) return 'Can’t change this while recording';
+      ui.selPeople.value = String(clamp(v, 1, MAX_PEOPLE));
+      onPeopleChanged();
+      return v === 1 ? 'Tracking one person' : `Tracking up to ${v} people`;
+    case 'sand': {
+      if (state.styleId !== 'sandman') setStyle('sandman');
+      if (v === 'reset') { applySand(SAND_DEFAULTS); localStorage.removeItem(SAND_KEY); return 'Sandman settings reset'; }
+      const patch = {};
+      for (const k of ['hue', 'gravity', 'decay', 'momentum']) if (k in v) patch[k] = v.relative ? sandSettings[k] + v[k] : v[k];
+      applySand(patch);
+      if ('hue' in v) return 'Sand colour changed';
+      if ('gravity' in v) return `Gravity ${sandSettings.gravity.toFixed(1)}×`;
+      if ('decay' in v) return `Decay ${sandSettings.decay.toFixed(1)} s`;
+      return `Momentum ${sandSettings.momentum.toFixed(1)}×`;
+    }
+    case 'style': {
+      if (v === 'next') nextStyle();
+      else if (v === 'previous') { const i = STYLES.findIndex(st => st.id === state.styleId); setStyle(STYLES[(i - 1 + STYLES.length) % STYLES.length].id); }
+      else setStyle(v);
+      return `Style: ${STYLES.find(st => st.id === state.styleId)?.label}`;
+    }
+    default: return null;
+  }
+}
+
+function initVoice() {
+  if (!voiceSupported) {
+    $('#voice-help-text').insertAdjacentHTML('beforeend', ' <b>This browser has no speech recognition, so the voice control button is hidden.</b>');
+  } else {
+    ui.btnVoice.hidden = false;
+    ui.btnVoiceHud.hidden = false;
+    ui.btnVoice.addEventListener('click', toggleVoice);
+    ui.btnVoiceHud.addEventListener('click', toggleVoice);
+  }
+  $('#voice-commands').innerHTML = voiceHelpHTML(true);
+}
+
+// ---------------------------------------------------------------------------------------
 // Wiring
 
 function init() {
@@ -1781,6 +1963,7 @@ function init() {
   }));
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   initSandControls();
+  initVoice();
   ui.btnStyle.addEventListener('click', nextStyle);
   setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));
@@ -1814,11 +1997,13 @@ function init() {
     if (state.view !== 'live' || e.ctrlKey || e.metaKey || e.altKey) return;
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.code === 'Escape' && !ui.voiceHelp.hidden) { e.preventDefault(); showVoiceHelp(false); return; }
     if (game.isOpen && e.code === 'Escape' && !document.fullscreenElement) { e.preventDefault(); game.back(); return; }
     if (e.code === 'KeyF' && (state.stream || game.isOpen)) { e.preventDefault(); toggleFullscreen(); return; }
     if (e.code === 'KeyO') { e.preventDefault(); setOverlay(!state.showOverlay); return; }
     if (e.code === 'KeyS') { e.preventDefault(); nextStyle(); return; }
     if (e.code === 'KeyV') { e.preventDefault(); setVideo(!state.showVideo); return; }
+    if (e.code === 'KeyM' && voiceSupported) { e.preventDefault(); toggleVoice(); return; }
     if (e.code !== 'Space' || tag === 'BUTTON' || !state.detector || game.isOpen) return;
     e.preventDefault();
     if (state.recording) stopRecording();

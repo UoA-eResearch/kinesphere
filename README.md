@@ -115,6 +115,32 @@ over passthrough where the browser supports `immersive-ar`. A controller trigger
 in the replay. The buttons only appear when the browser reports headset support; everything else
 in the app works without VR. three.js is loaded from the CDN the first time a 3D view is opened.
 
+### Voice control (hands-free)
+
+Press **🎤 Voice control** under the preview (or **🎤 Voice** in its corner, or <kbd>M</kbd>) and
+change settings by speaking, without going back to the keyboard. Say **“help”** (or “what can I
+say”) to show every command over the preview, and **“stop listening”** to turn it off. Each
+phrase you say is shown briefly at the top of the preview with what it did, so you can see
+whether you were understood. Examples:
+
+| Say | Does |
+| --- | --- |
+| “Start recording” / “Record”, “Stop”, “Cancel” | start after the 3-second countdown, stop (the dashboard opens), cancel the countdown |
+| “Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy blur”, “Next style” | overlay style |
+| “Overlay off”, “Hide video”, “Mirror off”, “Flip”, “3D view”, “Fullscreen”, “Smoothing strong” | display options |
+| “Blue sand”, “Gravity up / off / 2”, “Float”, “Longer trails”, “Decay 5 seconds”, “More momentum”, “Reset sand” | Sandman particles (switches to Sandman) |
+| “Two people”, “Just me”, “Use MultiPose / Lite / Heavy / Holistic” | tracking settings |
+| “Game”, “Play Sunrise / Neon / Rush”, “Stop song”, “Louder”, “Quieter”, “Mute” | dance game |
+| “Sessions”, “Dashboard”, “Live view” | change page |
+
+Phrases are matched loosely (“please”, “OK Kinesphere” and similar are ignored; the recogniser's
+alternative transcripts are tried in turn), but ordinary conversation is not mistaken for a
+command. Browsers only allow *entering* fullscreen from a click or key press, so “fullscreen”
+may ask you to press <kbd>F</kbd>; leaving it works by voice. Voice control uses the browser's
+Web Speech API: Chrome, Edge and Safari support it, Firefox does not (the button is hidden).
+Listening restarts automatically when the browser pauses it, and stops with a message if the
+microphone is blocked or recognition keeps failing.
+
 ### Game mode
 
 The **Game** tab turns the camera preview into a dance game in the spirit of Just Dance. Pick a
@@ -186,6 +212,14 @@ remembered.
   are stored in the browser's Cache Storage under `kinesphere-models-v1`, between 5 and 45 MB
   depending on which models you have used. Clear them from the **?** help panel or by clearing
   the site's data.
+* **Voice control** is off until you turn it on, and is not remembered between visits. It uses the
+  browser's own speech recognition. Where the browser can transcribe on the device (recent Chrome
+  with its on-device speech pack) the app uses that, and starts downloading the pack in the
+  background when it is available. Otherwise your voice is sent to the browser maker's speech
+  service (Google for Chrome, Apple for Safari, Microsoft for Edge) to be turned into text; the
+  app asks before turning voice control on for the first time in that case. Only the
+  recognised text is used, to pick a command; nothing is recorded or stored. Video never leaves
+  your device either way.
 * Game best scores and game settings are kept in `localStorage` too (`kinesphere:gameBest`,
   `kinesphere:gameVolume`, `kinesphere:gameRecord`).
 * Sessions live in the browser's IndexedDB (database `kinesphere`, store `sessions`), with a
@@ -276,6 +310,7 @@ js/smoothing.js   One Euro display smoothing for the overlay and replay
 js/viewer3d.js    three.js 3D figure viewer with WebXR (VR / AR) sessions
 js/game.js        game mode: song menu, Web Audio music, coach and lane rendering, scoring loop
 js/game-core.js   game logic without DOM or audio: moves, songs, choreography, pose matching
+js/voice.js       voice control: spoken-phrase parser and Web Speech API listener
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export

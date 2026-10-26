@@ -47,6 +47,7 @@
               <div class="hud-tools">
                 <button id="hud-record" class="hud-btn fs-only" disabled>● Record</button>
                 <button id="hud-stop" class="hud-btn fs-only" hidden>■ Stop</button>
+                <button id="btn-voice-hud" class="hud-btn voice-btn" aria-pressed="false" title="Voice control: change settings by speaking (M)" hidden>🎤 Voice: off</button>
                 <button id="btn-video" class="hud-btn" aria-pressed="true" title="Show or hide the camera feed (V)">Video: on</button>
                 <button id="btn-style" class="hud-btn" title="Next overlay style (S)">Style</button>
                 <button id="btn-overlay" class="hud-btn" aria-pressed="true" title="Show or hide the detected pose (O)">Overlay: on</button>
@@ -61,6 +62,8 @@
               <div id="status" class="status">Camera off</div>
             </div>
           </div>
+          <div id="voice-chip" class="voice-chip" role="status" aria-live="polite" hidden></div>
+          <div id="voice-help" class="voice-help" role="dialog" aria-label="Voice commands" hidden></div>
           <div id="stage-placeholder" class="stage-placeholder">
             <h1>Record a dance session</h1>
             <p>Your webcam feed and detected pose are shown here. Video never leaves your device; only pose landmarks are recorded.</p>
@@ -103,6 +106,7 @@
         <label class="select" title="How many dancers to track at once. Each extra person costs speed, and the dashboard shows one tab per person.">People
           <select id="sel-people" aria-label="Number of people to track"></select>
         </label>
+        <button id="btn-voice" class="btn btn-sm voice-btn" aria-pressed="false" title="Change settings hands-free by speaking (M). Say “help” for the list of commands." hidden>🎤 Voice control</button>
         <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="About these settings">?</button>
       </div>
       <div id="sand-controls" class="effect-controls" hidden>
@@ -134,12 +138,15 @@
           <dd>How many dancers to track at the same time (up to six). Choosing more than one person switches the model to MoveNet MultiPose, the best at keeping people apart (its tracker remembers who is who when dancers cross); you can still pick a MediaPipe model afterwards for 3D depth. Every extra person costs frame rate. The dashboard analyses each person separately, with one tab per person, and the exported file and CSV contain every person. Pose control starts or stops the recording when <em>anyone</em> raises both hands.</dd>
           <dt>3D view and VR</dt>
           <dd>The <em>3D view</em> button (live, and in the replay) shows the tracked skeleton as a life-size figure you can orbit with the mouse or a finger. Depth comes from MediaPipe's per-joint z estimate, so MoveNet sessions appear flat; that estimate is noisy and exaggerated, so the <em>Depth</em> slider shows 35% of it by default (0% gives a flat figure, 100% the raw estimate). On a WebXR-capable browser with a headset connected (Meta Quest Browser, or Chrome/Edge with a PC headset) <em>Enter VR</em> puts the figure on the floor in front of you at life size, and <em>Enter AR</em> does the same over passthrough where supported; a controller trigger toggles play/pause in the replay. VR is optional and the buttons only appear when the browser reports headset support.</dd>
+          <dt>Voice control</dt>
+          <dd id="voice-help-text">Press <b>🎤 Voice control</b> (or <kbd>M</kbd>) and speak to change settings hands-free: say <em>“help”</em> to see every command on screen. It uses your browser's speech recognition. When the browser can transcribe on this device it does; otherwise your voice is sent to the browser maker's speech service (Google for Chrome, Apple for Safari, Microsoft for Edge) to be turned into text. Video never leaves your device either way. Firefox does not support speech recognition.
+            <span id="voice-commands"></span></dd>
           <dt>What does not change</dt>
           <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, level, speed and path are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB, with a progress bar in the preview; later uses come from the cache below).</dd>
         </dl>
         <p class="cache-info"><span id="cache-info">Downloaded models are kept in this browser so they load instantly next time.</span> <button id="btn-clear-cache" class="btn btn-ghost btn-sm" hidden>Clear cached models</button></p>
       </details>
-      <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay, <kbd>V</kbd> to show or hide the camera feed, <kbd>S</kbd> for the next overlay style.</p>
+      <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay, <kbd>V</kbd> to show or hide the camera feed, <kbd>S</kbd> for the next overlay style, <kbd>M</kbd> for voice control (then say “help”).</p>
     </section>
 
     <section id="view-dashboard" class="view" hidden></section>
