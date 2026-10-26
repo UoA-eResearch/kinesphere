@@ -16,6 +16,9 @@ export const MAJOR_CONNECTIONS = [[1, 2], [1, 3], [3, 5], [2, 4], [4, 6], [1, 7]
 /** MAJOR slots on the dancer's left and right (head excluded). */
 export const LEFT_SLOTS = [1, 3, 5, 7, 9, 11];
 export const RIGHT_SLOTS = [2, 4, 6, 8, 10, 12];
+/** Upper body: shoulders, elbows, hands; lower body: hips, knees, feet (the head counts in neither). */
+export const UPPER_SLOTS = [1, 2, 3, 4, 5, 6];
+export const LOWER_SLOTS = [7, 8, 9, 10, 11, 12];
 
 const VIS_MIN = 0.3;
 const MAX_GAP_S = 0.5;        // gaps longer than this are not used for velocities
@@ -30,10 +33,12 @@ const SPIKE_TORSO = 0.35;     // a landmark this many torso lengths from its nei
 export const CAMERA_HFOV = 65; // degrees: assumed horizontal field of view of a typical webcam
 export const ASSUMED_TORSO_M = 0.5; // metres, mid-hip to mid-shoulder, when no 3D data says otherwise
 
+// Keys stay small / medium / large (stored and exported data); the labels people see are near /
+// medium / far, describing how far from the body the limbs reached.
 export const KINESPHERE_CLASSES = [
-  { key: 'small', label: 'Small' },
-  { key: 'medium', label: 'Medium' },
-  { key: 'large', label: 'Large' },
+  { key: 'small', label: 'Near', letter: 'N' },
+  { key: 'medium', label: 'Medium', letter: 'M' },
+  { key: 'large', label: 'Far', letter: 'F' },
 ];
 export const LEVELS = [
   { key: 'high', label: 'High' },
@@ -306,6 +311,8 @@ export function analyze(session) {
   const sideSum = slots => slots.reduce((acc, j) => acc + (Number.isFinite(meanSpeed[MAJOR[j]]) ? meanSpeed[MAJOR[j]] : 0), 0);
   const leftSum = sideSum(LEFT_SLOTS), rightSum = sideSum(RIGHT_SLOTS);
   const lateral = { left: leftSum / ((leftSum + rightSum) || 1), right: rightSum / ((leftSum + rightSum) || 1) };
+  const upperSum = sideSum(UPPER_SLOTS), lowerSum = sideSum(LOWER_SLOTS);
+  const vertical = { upper: upperSum / ((upperSum + lowerSum) || 1), lower: lowerSum / ((upperSum + lowerSum) || 1) };
 
   const pt = (k, i) => [X[k][i], Y[k][i]];
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -601,7 +608,7 @@ export function analyze(session) {
     ok: true,
     durationMs, frameCount: n, validFraction: validCount / n, fps, torsoLength: S,
     kinesphere,
-    body: { joints, lateral },
+    body: { joints, lateral, vertical },
     levels,
     speed: {
       series: speedSeries, mean: mean(frameSpeed), peak: Number.isFinite(peak) ? peak : NaN, peakT,

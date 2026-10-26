@@ -7,8 +7,8 @@ import {
 import {
   store, buildSession, serialize, deserialize, toCSV, download, safeFilename, StorageFullError, personView, frameOffset, handOffset, personPresent,
 } from './session.js';
-import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
-import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
+import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS, UPPER_SLOTS, LOWER_SLOTS } from './analysis.js';
+import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, upperLowerFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAND_DEFAULTS, sandSettings, setSandSettings } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
@@ -1094,6 +1094,8 @@ function compareCards(A, B) {
     ...KINESPHERE_CLASSES.map(c => [`${c.label} kinesphere`, pct(share(c.key, A)), pct(share(c.key, B)), ptsDiff(share(c.key, A), share(c.key, B))]),
     ['Left side of the body', pct(a.body.lateral.left), pct(b.body.lateral.left), ptsDiff(a.body.lateral.left, b.body.lateral.left)],
     ['Right side of the body', pct(a.body.lateral.right), pct(b.body.lateral.right), ptsDiff(a.body.lateral.right, b.body.lateral.right)],
+    ['Upper body', pct(a.body.vertical.upper), pct(b.body.vertical.upper), ptsDiff(a.body.vertical.upper, b.body.vertical.upper)],
+    ['Lower body', pct(a.body.vertical.lower), pct(b.body.vertical.lower), ptsDiff(a.body.vertical.lower, b.body.vertical.lower)],
     ...LEVELS.map(l => [`${l.label} level`, pct(a.levels.shares[l.key]), pct(b.levels.shares[l.key]), ptsDiff(a.levels.shares[l.key], b.levels.shares[l.key])]),
     ['Most active body part', `${top(A).name} (${fmtPct(top(A).share)})`, `${top(B).name} (${fmtPct(top(B).share)})`, ''],
     ['Mean speed', num(mps(A)(a.speed.mean), 2, ' m/s'), num(mps(B)(b.speed.mean), 2, ' m/s'), numDiff(mps(A)(a.speed.mean), mps(B)(b.speed.mean), 2, ' m/s')],
@@ -1118,7 +1120,7 @@ function compareCards(A, B) {
     </section>
     <section class="card">
       <h2>Kinesphere</h2>
-      <p class="card-sub">Share of time in a small, medium or large kinesphere, each measured against that dancer's own limb lengths.</p>
+      <p class="card-sub">Share of time in a near, medium or far kinesphere, each measured against that dancer's own limb lengths.</p>
       <div class="cmp-grid">
         <div><h3>${tag('a')}${escapeHtml(A.label)}</h3><div id="cmp-kine-a"></div></div>
         <div><h3>${tag('b')}${escapeHtml(B.label)}</h3><div id="cmp-kine-b"></div></div>
@@ -1126,11 +1128,12 @@ function compareCards(A, B) {
     </section>
     <section class="card">
       <h2>Body</h2>
-      <p class="card-sub">Which body parts moved, on which side, and at what level. Both activity figures share one colour scale, so the same colour means the same share of movement.</p>
+      <p class="card-sub">Which body parts moved, on which side, in the upper or lower body, and at what level. Both activity figures share one colour scale, so the same colour means the same share of movement.</p>
       <div class="cmp-grid">
         ${pair('Body part activity', 'cmp-body')}
         <div class="cmp-row-title"><div id="cmp-body-legend"></div><label class="check"><input type="checkbox" id="cmp-show-values"> Show values</label></div>
         ${pair('Left / right', 'cmp-side')}
+        ${pair('Upper / lower', 'cmp-updown')}
         ${pair('Level: where was the activity?', 'cmp-level')}
       </div>
     </section>
@@ -1151,6 +1154,7 @@ function mountCompareCharts(A, B, root) {
   for (const [X, k] of [[A, 'a'], [B, 'b']]) {
     stackedBar(root.querySelector(`#cmp-kine-${k}`), KINESPHERE_CLASSES.map((c, i) => ({ label: c.label, value: X.a.kinesphere.shares[c.key], fill: ord[i].fill, ink: ord[i].ink })));
     sideFigure(root.querySelector(`#cmp-side-${k}`), { pose: TEMPLATE_POSE, left: X.a.body.lateral.left, right: X.a.body.lateral.right });
+    upperLowerFigure(root.querySelector(`#cmp-updown-${k}`), { pose: TEMPLATE_POSE, upper: X.a.body.vertical.upper, lower: X.a.body.vertical.lower });
     levelsFigure(root.querySelector(`#cmp-level-${k}`), { pose: TEMPLATE_POSE, shares: X.a.levels.shares, labels: Object.fromEntries(LEVELS.map(l => [l.key, l.label])) });
   }
   const maxShare = Math.max(1e-6, ...[A, B].flatMap(X => X.a.body.joints.map(j => j.share)));
@@ -1244,16 +1248,16 @@ function dashboardCards(a) {
         ${k.metres ? stat('Arm length', ((k.metres.upperArm + k.metres.forearm) * 100).toFixed(0), 'cm, shoulder to wrist') : stat('Reach', k.radii.shared.large.toFixed(2), 'torso lengths from the torso centre')}
       </div>
       <div id="kine-table"></div>
-      <p class="fine"><b>Small</b>: the sphere at the distance of the proximal joints (the shoulders). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows) when the arm is outstretched. <b>Large</b>: the sphere at the distance of the hands when outstretched.
-        The spheres are sized from the arms and stay fixed during the session; lifted legs are compared with the same spheres (a standing leg is support, not reach). Each hand or foot is classed by the sphere it is nearest to, and the frame takes the largest of those, so relaxed arms hanging at the sides count as small. Each figure above is the most typical pose in that class.
+      <p class="fine"><b>Near</b>: the sphere at the distance of the proximal joints (the shoulders). <b>Medium</b>: the sphere at the distance of the mid-limb joints (elbows) when the arm is outstretched. <b>Far</b>: the sphere at the distance of the hands when outstretched.
+        The spheres are sized from the arms and stay fixed during the session; lifted legs are compared with the same spheres (a standing leg is support, not reach). Each hand or foot is classed by the sphere it is nearest to, and the frame takes the farthest of those, so relaxed arms hanging at the sides count as near. Each figure above is the most typical pose in that class.
         ${k.mode === '3d'
-          ? 'Limb lengths are the median 3D length of each segment from MediaPipe\'s world landmarks (metric, in metres); distances are in torso lengths. The replay overlay draws the spheres as circles on screen, so a hand reaching towards the camera can be in the large sphere while it looks inside the circle.'
+          ? 'Limb lengths are the median 3D length of each segment from MediaPipe\'s world landmarks (metric, in metres); distances are in torso lengths. The replay overlay draws the spheres as circles on screen, so a hand reaching towards the camera can be in the far sphere while it looks inside the circle.'
           : 'Limb lengths are the 90th percentile of each segment\'s length on screen, so reaching straight towards or away from the camera is under-counted.'}</p>
     </section>
 
     <section class="card">
       <h2>Body</h2>
-      <p class="card-sub">Which body parts moved, on which side, and at what height the activity happened. Left and right are the dancer's own sides.</p>
+      <p class="card-sub">Which body parts moved, on which side, in the upper or lower body, and at what height the activity happened. Left and right are the dancer's own sides.</p>
       <div class="body-grid">
         <div>
           <h3>Body part activity</h3>
@@ -1266,6 +1270,10 @@ function dashboardCards(a) {
           <div id="side-figure"></div>
         </div>
         <div>
+          <h3>Upper / lower</h3>
+          <div id="updown-figure"></div>
+        </div>
+        <div>
           <h3>Level: where was the activity?</h3>
           <div id="level-figure"></div>
         </div>
@@ -1273,6 +1281,7 @@ function dashboardCards(a) {
       <div id="body-table"></div>
       <p class="fine"><b>Body part activity</b>: each of the 13 markers (head, shoulders, elbows, hands, hips, knees, feet) is sized and coloured by its share of all movement; <em>active time</em> is the share of the session that part moved faster than ${'0.5'} torso lengths per second.
         <b>Left / right</b>: share of movement on each side of the body (head excluded).
+        <b>Upper / lower</b>: share of movement above the waist (shoulders, elbows, hands) and below it (hips, knees, feet), head excluded.
         <b>Level</b> is about position, not which limb moved: <em>high</em> when at least one limb is above standing shoulder height, <em>low</em> when a hand or the hips are below standing knee height, <em>medium</em> otherwise. The head is not counted; standing heights are measured from this session (standing shoulder ${a.levels.standing.shoulder.toFixed(2)} and knee ${a.levels.standing.knee.toFixed(2)} torso lengths above the floor).
         The floor is only measured while a foot is in view (${fmtPct(a.levels.feetInView)} of this session); when the feet are out of frame the dancer is assumed to be standing, so low is then only detected from the hands.</p>
     </section>
@@ -1324,7 +1333,7 @@ function mountCharts(a, session, root) {
   KINESPHERE_CLASSES.forEach((c, ci) => {
     bodyFigure(root.querySelector(`#kine-fig-${c.key}`), {
       pose: k.poses[c.key] ?? TEMPLATE_POSE, showSides: false,
-      rings: [R.small, R.medium, R.large].map((r, ri) => ({ r, active: ri === ci, label: 'SML'[ri], color: ri === ci ? ord[ci].fill : null })),
+      rings: [R.small, R.medium, R.large].map((r, ri) => ({ r, active: ri === ci, label: KINESPHERE_CLASSES[ri].letter, color: ri === ci ? ord[ci].fill : null })),
     });
   });
   const L = k.limbs, fmt = v => v.toFixed(2);
@@ -1336,7 +1345,7 @@ function mountCharts(a, session, root) {
     limbRow('Upper arm (shoulder to elbow)', 'upperArm'), limbRow('Forearm (elbow to wrist)', 'forearm'),
     limbRow('Thigh (hip to knee)', 'thigh'), limbRow('Shin (knee to ankle)', 'shin'),
     limbRow('Torso centre to shoulder', 'centreShoulder'), limbRow('Torso centre to hip', 'centreHip'),
-    ['Sphere radii: small / medium / large (shoulder / + upper arm / + forearm)', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
+    ['Sphere radii: near / medium / far (shoulder / + upper arm / + forearm)', `${fmt(R.small)} / ${fmt(R.medium)} / ${fmt(R.large)}`],
     ['Class boundaries (halfway between spheres)', `${fmt((R.small + R.medium) / 2)} / ${fmt((R.medium + R.large) / 2)}`],
     ...KINESPHERE_CLASSES.map(c => [`Time in ${c.label.toLowerCase()} kinesphere`, fmtPct(k.shares[c.key], 1)]),
   ].map(pad)));
@@ -1356,6 +1365,7 @@ function mountCharts(a, session, root) {
   drawBody();
   root.querySelector('#body-legend').append(heatLegend('Less movement', 'More movement'));
   sideFigure(root.querySelector('#side-figure'), { pose: TEMPLATE_POSE, left: b.lateral.left, right: b.lateral.right });
+  upperLowerFigure(root.querySelector('#updown-figure'), { pose: TEMPLATE_POSE, upper: b.vertical.upper, lower: b.vertical.lower });
   levelsFigure(root.querySelector('#level-figure'), {
     pose: TEMPLATE_POSE, shares: a.levels.shares,
     labels: Object.fromEntries(LEVELS.map(l => [l.key, l.label])),
@@ -1364,6 +1374,7 @@ function mountCharts(a, session, root) {
     ['Body part', 'Share of movement', 'Active time', 'Mean speed (torso lengths/s)'],
     [...b.joints.map(j => [j.name, fmtPct(j.share, 1), fmtPct(j.activeTime, 1), Number.isFinite(j.meanSpeed) ? j.meanSpeed.toFixed(2) : '–']),
       ['Left side', fmtPct(b.lateral.left, 1), '', ''], ['Right side', fmtPct(b.lateral.right, 1), '', ''],
+      ['Upper body', fmtPct(b.vertical.upper, 1), '', ''], ['Lower body', fmtPct(b.vertical.lower, 1), '', ''],
       ...LEVELS.map(l => [`${l.label} level`, '', fmtPct(a.levels.shares[l.key], 1), ''])]));
 
   // Speed: values are hidden by default (torso lengths per second mean little on their own);
@@ -1452,7 +1463,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
       ctx.fillStyle = ri === kc ? OV_KCOLORS[ri] : 'rgba(255,255,255,0.6)';
       ctx.textAlign = 'left';
       ctx.font = `600 ${Math.round(13 * u)}px system-ui, sans-serif`;
-      ctx.fillText('SML'[ri], wx + r * sc * h * 0.71 + 4 * u, wy - r * sc * h * 0.71 - 4 * u);
+      ctx.fillText(KINESPHERE_CLASSES[ri].letter, wx + r * sc * h * 0.71 + 4 * u, wy - r * sc * h * 0.71 - 4 * u);
     });
     ctx.beginPath(); ctx.arc(wx, wy, 3 * u, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
   }
@@ -1469,11 +1480,13 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
     ctx.fill();
     ctx.globalAlpha = 1;
   }
-  // Left / right over the last second, and the most active part right now.
-  let left = 0, right = 0;
+  // Left / right and upper / lower over the last second, and the most active part right now.
+  let left = 0, right = 0, upper = 0, lower = 0;
   for (let j = i; j >= 0 && times[j] >= times[i] - 1000; j--) {
     for (const s of LEFT_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) left += v; }
     for (const s of RIGHT_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) right += v; }
+    for (const s of UPPER_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) upper += v; }
+    for (const s of LOWER_SLOTS) { const v = F.jointSpeed[s][j]; if (Number.isFinite(v)) lower += v; }
   }
   let top = -1, topV = OV_ACTIVE;
   for (let j = 1; j < 13; j++) if (speedNow(j) > topV) { topV = speedNow(j); top = j; }
@@ -1483,6 +1496,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
     [`Kinesphere ${a.kinesphere.mode === '3d' ? '3D' : '2D'}`, kc >= 0 ? `${KINESPHERE_CLASSES[kc].label} · ${a.kinesphere.limbNames[F.kLimb[i]] ?? ''}` : '–', kc >= 0 ? OV_KCOLORS[kc] : '#fff'],
     ['Level', lvl >= 0 ? `${LEVELS[lvl].label}${F.floorMeasured[i] ? '' : ' (feet out of view)'}` : '–', '#fff'],
     ['Left / right', lr > 0 ? `${fmtPct(left / lr)} / ${fmtPct(right / lr)}` : '–', '#fff'],
+    ['Upper / lower', upper + lower > 0 ? `${fmtPct(upper / (upper + lower))} / ${fmtPct(lower / (upper + lower))}` : '–', '#fff'],
     ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],
   ];
   if (person != null) rows.unshift(['Person', String(person + 1), '#fff']);

@@ -490,6 +490,29 @@ export function sideFigure(container, { pose, left, right }) {
  * Levels: three horizontal bands (high above standing shoulder height, medium between
  * shoulder and knee height, low below the knee), each shaded and labelled with its share.
  */
+/** The body split at the waist: upper (shoulders, elbows, hands) and lower (hips, knees, feet). */
+export function upperLowerFigure(container, { pose, upper, lower }) {
+  container.classList.add('viz-figure-wrap');
+  container.replaceChildren();
+  const xs = pose.map(p => p[0]), ys = pose.map(p => p[1]);
+  const minX = Math.min(...xs) - 0.6, maxX = Math.max(...xs) + 0.6;
+  const minY = Math.min(...ys) - 0.5, maxY = Math.max(...ys) + 0.35;
+  const waist = (pose[7][1] + pose[8][1]) / 2; // hips
+  const W = maxX - minX, H = maxY - minY;
+  const root = svg('svg', { viewBox: `${minX} ${minY} ${W} ${H}`, class: 'viz-figure viz-updown-figure', role: 'img' });
+  root.style.aspectRatio = `${W} / ${H}`;
+  root.setAttribute('aria-label', `Upper body ${fmtPct(upper)}, lower body ${fmtPct(lower)} of movement`);
+  const m = Math.max(upper, lower);
+  root.append(svg('rect', { x: minX, y: minY, width: maxX - minX, height: waist - minY - 0.02, rx: 0.12, style: `fill:${blockFill(upper, m)}` }));
+  root.append(svg('rect', { x: minX, y: waist + 0.02, width: maxX - minX, height: maxY - waist - 0.02, rx: 0.12, style: `fill:${blockFill(lower, m)}` }));
+  drawStick(root, pose);
+  root.append(svg('text', { x: minX + 0.15, y: minY + 0.35, class: 'viz-side' }, ['Upper']));
+  root.append(svg('text', { x: minX + 0.15, y: waist + 0.4, class: 'viz-side' }, ['Lower']));
+  root.append(svg('text', { x: maxX - 0.12, y: minY + 0.75, class: 'viz-big', 'text-anchor': 'end' }, [fmtPct(upper)]));
+  root.append(svg('text', { x: maxX - 0.12, y: waist + 0.75, class: 'viz-big', 'text-anchor': 'end' }, [fmtPct(lower)]));
+  container.append(root);
+}
+
 export function levelsFigure(container, { pose, shares, labels = { high: 'High', mid: 'Medium', low: 'Low' } }) {
   container.classList.add('viz-figure-wrap');
   container.replaceChildren();
