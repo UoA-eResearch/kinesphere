@@ -105,6 +105,16 @@
         </label>
         <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="About these settings">?</button>
       </div>
+      <div id="sand-controls" class="effect-controls" hidden>
+        <span class="effect-controls-title">Sandman particles</span>
+        <label class="select" title="Colour of the sand">Colour
+          <input type="range" id="sand-hue" class="hue-range" min="0" max="360" step="1" aria-label="Particle colour (hue)"></label>
+        <label class="select" title="How fast the grains fall; below zero they float upwards">Gravity
+          <input type="range" id="sand-gravity" min="-1" max="3" step="0.1" aria-label="Particle gravity"> <span id="sand-gravity-val" class="mono"></span></label>
+        <label class="select" title="How long a grain lasts before it fades away">Decay time
+          <input type="range" id="sand-decay" min="0.3" max="8" step="0.1" aria-label="Particle decay time"> <span id="sand-decay-val" class="mono"></span></label>
+        <button id="sand-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
+      </div>
       <p id="setting-help" class="setting-help"></p>
       <details id="help-panel" class="help-panel">
         <summary>About the model and people settings</summary>

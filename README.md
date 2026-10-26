@@ -31,8 +31,13 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    the camera: detection and recording carry on.
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
-   sparks that fly off fast-moving joints, or a constellation. The same style is used in the
-   dashboard replay. Styles are purely visual; the recorded data is identical.
+   sparks that fly off fast-moving joints, a constellation, or **Sandman**: a body made of sand
+   that sheds grains as you move (a trickle when still, a stream from fast limbs), which fall,
+   settle on the bottom of the picture and fade. When Sandman is selected, sliders under the
+   controls set the particle **Colour**, **Gravity** (0 to 3 times normal; below zero the grains
+   float upwards) and **Decay time** (0.3 to 8 s before a grain fades). They take effect
+   immediately, are remembered, and **Reset** restores the defaults. The same style and settings
+   are used in the dashboard replay. Styles are purely visual; the recorded data is identical.
    If you have more than one camera a **Camera** selector appears next to the model selector;
    your choice is remembered. Rear-facing cameras are shown un-mirrored, and **Mirror view** in
    the controls flips the feed, overlay and 3D figure either way.

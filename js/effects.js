@@ -23,6 +23,7 @@ export const STYLES = [
   { id: 'trails', label: 'Light trails' },
   { id: 'sparks', label: 'Sparks' },
   { id: 'constellation', label: 'Constellation' },
+  { id: 'sandman', label: 'Sandman (falling particles)' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -436,7 +437,116 @@ export function drawPersonBadge(ctx, lm, offset, w, h, person, { mirror = false,
   ctx.restore();
 }
 
-const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle };
+// ---- sandman: a body of sand that sheds grains, which fall, pile up on the floor and fade ----
+
+/** Live-adjustable sandman settings (shared by every sandman effect, read on every frame). */
+export const SAND_DEFAULTS = { hue: 38, gravity: 1, decay: 2.5 };
+export const sandSettings = { ...SAND_DEFAULTS };
+export function setSandSettings(patch) {
+  for (const k of Object.keys(SAND_DEFAULTS)) if (Number.isFinite(patch?.[k])) sandSettings[k] = patch[k];
+}
+
+function sandmanStyle() {
+  const MAX = 6000;
+  const grains = []; // { x, y, vx, vy, age, life, size, l }
+  const tracker = makeTracker();
+  const SOURCES = BODY_BONES.filter(([a, b]) => a <= 28 && b <= 28);
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
+      const { hue: baseHue, gravity, decay } = sandSettings;
+      const hue = baseHue + (person ? personColors(person).hue : 0);
+      const g = h * 0.8 * gravity;              // px/s^2
+      const grain = Math.max(1.5, w / 480);     // grain size, px
+      const p = lm ? project(lm, offset, w, h, mirror) : null;
+      ctx.save();
+      if (p) {
+        tracker.update(p, dt);
+        const { vx, vy } = tracker;
+        const emit = (x, y, jvx, jvy, n) => {
+          for (let k = 0; k < n && grains.length < MAX; k++) {
+            grains.push({
+              x: x + rand(-grain, grain), y: y + rand(-grain, grain),
+              vx: jvx * 0.3 + rand(-1, 1) * h * 0.03, vy: jvy * 0.3 + rand(-1, 1) * h * 0.02,
+              age: 0, life: decay * rand(0.6, 1.2), size: grain * rand(0.7, 1.3), l: rand(52, 78),
+            });
+          }
+        };
+        // the body itself: a dusting of grains along every bone, the torso and the head
+        const body = [];
+        const scatter = Math.max(2, w / 260);
+        for (const [a, b] of SOURCES) {
+          if (p.v[a] < minVis || p.v[b] < minVis) continue;
+          const len = Math.hypot(p.x[b] - p.x[a], p.y[b] - p.y[a]);
+          const n = Math.ceil(len / (grain * 2.2));
+          for (let k = 0; k < n; k++) {
+            const t = Math.random();
+            body.push([p.x[a] + (p.x[b] - p.x[a]) * t + rand(-scatter, scatter), p.y[a] + (p.y[b] - p.y[a]) * t + rand(-scatter, scatter)]);
+          }
+          // shed grains: a trickle when still, a stream when the limb moves fast
+          const sp = (Math.hypot(vx[a], vy[a]) + Math.hypot(vx[b], vy[b])) / 2;
+          const rate = (len / h) * 260 * (1 + 4 * Math.min(2, sp / (h * 0.8)));
+          let n2 = Math.floor(rate * dt + Math.random());
+          while (n2-- > 0) {
+            const t = Math.random();
+            emit(p.x[a] + (p.x[b] - p.x[a]) * t, p.y[a] + (p.y[b] - p.y[a]) * t,
+              vx[a] + (vx[b] - vx[a]) * t, vy[a] + (vy[b] - vy[a]) * t, 1);
+          }
+        }
+        if ([11, 12, 23, 24].every(i => p.v[i] >= minVis)) {
+          const area = Math.abs((p.x[12] - p.x[11]) * (p.y[23] - p.y[11]));
+          const n = Math.min(500, Math.ceil(area / (grain * grain * 9)));
+          for (let k = 0; k < n; k++) {
+            const u = Math.random(), v = Math.random();
+            const top = [p.x[11] + (p.x[12] - p.x[11]) * u, p.y[11] + (p.y[12] - p.y[11]) * u];
+            const bot = [p.x[23] + (p.x[24] - p.x[23]) * u, p.y[23] + (p.y[24] - p.y[23]) * u];
+            body.push([top[0] + (bot[0] - top[0]) * v, top[1] + (bot[1] - top[1]) * v]);
+          }
+          if (Math.random() < dt * 40) emit(body[body.length - 1][0], body[body.length - 1][1], vx[23], vy[23], 2);
+        }
+        const head = neckAndHead(p, minVis);
+        if (head) {
+          const n = Math.min(300, Math.ceil(head.r * head.r * 3 / (grain * grain * 4)));
+          for (let k = 0; k < n; k++) {
+            const a = rand(0, Math.PI * 2), r = head.r * Math.sqrt(Math.random());
+            body.push([head.hx + Math.cos(a) * r, head.hy + Math.sin(a) * r]);
+          }
+          body.push(...Array.from({ length: 12 }, () => { const t = Math.random(); return [head.nx + (head.hx - head.nx) * t, head.ny + (head.hy - head.ny) * t]; }));
+          if (Math.random() < dt * 30) emit(head.hx + rand(-head.r, head.r), head.hy + rand(-head.r, head.r) * 0.5, vx[0], vy[0], 2);
+        }
+        ctx.fillStyle = hsla(hue, 70, 72, 0.9);
+        for (const [x, y] of body) ctx.fillRect(x - grain / 2, y - grain / 2, grain, grain);
+        drawExtras(ctx, w, h, opts, 'ghost');
+      } else tracker.reset();
+      // falling grains: gravity, a little air drag, a soft landing on the floor (the frame's bottom)
+      const floor = h - 1;
+      for (let i = grains.length - 1; i >= 0; i--) {
+        const q = grains[i];
+        q.age += dt;
+        if (q.age >= q.life) { grains[i] = grains[grains.length - 1]; grains.pop(); continue; }
+        q.vy += g * dt;
+        q.vx *= Math.pow(0.4, dt);
+        q.vy *= Math.pow(0.85, dt);
+        q.x += q.vx * dt;
+        q.y += q.vy * dt;
+        if (q.y > floor - q.size) {
+          q.y = floor - q.size;
+          q.vy = q.vy > h * 0.2 ? -q.vy * 0.15 : 0;
+          q.vx *= 0.5;
+        } else if (q.y < -h * 0.2 && g < 0) {
+          q.age = q.life; // floated away
+        }
+        const fade = Math.min(1, 3 * (1 - q.age / q.life));
+        ctx.fillStyle = hsla(hue, 65, q.l, 0.85 * fade);
+        ctx.fillRect(q.x - q.size / 2, q.y - q.size / 2, q.size, q.size);
+      }
+      ctx.restore();
+    },
+    reset() { grains.length = 0; tracker.reset(); },
+  };
+}
+
+const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle };
 
 export function createEffect(id) {
   const factory = FACTORIES[id] ?? FACTORIES[DEFAULT_STYLE];

@@ -10,7 +10,7 @@ import {
 import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS } from './analysis.js';
 import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
-import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge } from './effects.js';
+import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAND_DEFAULTS, sandSettings, setSandSettings } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
 import { createGame } from './game.js';
@@ -33,6 +33,7 @@ const MIRROR3D_KEY = 'kinesphere:mirror3d';
 const OVERLAY_METRICS_KEY = 'kinesphere:replayOverlay';
 const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
+const SAND_KEY = 'kinesphere:sand';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -55,6 +56,8 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
+  sandControls: $('#sand-controls'), sandHue: $('#sand-hue'), sandGravity: $('#sand-gravity'), sandGravityVal: $('#sand-gravity-val'),
+  sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandReset: $('#sand-reset'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
   live3dBar: $('#live-3d-bar'), live3d: $('#live-3d'), liveDepth: $('#live-depth'), liveDepthVal: $('#live-depth-val'), btnLive3d: $('#btn-live-3d'), btnLiveVr: $('#btn-live-vr'), btnLiveAr: $('#btn-live-ar'), liveVrNote: $('#live-vr-note'),
 };
@@ -406,7 +409,29 @@ function setStyle(id) {
   ui.selStyle.value = state.styleId;
   ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.styleId)?.label ?? state.styleId}`;
   rebuildEffects();
+  ui.sandControls.hidden = state.styleId !== 'sandman';
   if (!state.showOverlay) setOverlay(true);
+}
+
+/** Sandman particle sliders: applied live (every sandman effect reads them each frame) and remembered. */
+function syncSandUI() {
+  ui.sandHue.value = String(sandSettings.hue);
+  ui.sandGravity.value = String(sandSettings.gravity);
+  ui.sandDecay.value = String(sandSettings.decay);
+  ui.sandGravityVal.textContent = `${sandSettings.gravity.toFixed(1)}×`;
+  ui.sandDecayVal.textContent = `${sandSettings.decay.toFixed(1)} s`;
+  ui.sandControls.style.setProperty('--sand', `hsl(${sandSettings.hue}, 70%, 65%)`);
+}
+function initSandControls() {
+  try { setSandSettings(JSON.parse(localStorage.getItem(SAND_KEY)) ?? {}); } catch { /* defaults */ }
+  const update = () => {
+    setSandSettings({ hue: Number(ui.sandHue.value), gravity: Number(ui.sandGravity.value), decay: Number(ui.sandDecay.value) });
+    localStorage.setItem(SAND_KEY, JSON.stringify(sandSettings));
+    syncSandUI();
+  };
+  for (const el of [ui.sandHue, ui.sandGravity, ui.sandDecay]) el.addEventListener('input', update);
+  ui.sandReset.addEventListener('click', () => { setSandSettings(SAND_DEFAULTS); localStorage.removeItem(SAND_KEY); syncSandUI(); });
+  syncSandUI();
 }
 
 function nextStyle() {
@@ -1519,6 +1544,7 @@ function init() {
     return opt;
   }));
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
+  initSandControls();
   ui.btnStyle.addEventListener('click', nextStyle);
   setStyle(state.styleId);
   ui.btnVideo.addEventListener('click', () => setVideo(!state.showVideo));

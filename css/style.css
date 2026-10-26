@@ -207,6 +207,15 @@ select, input[type="text"] {
   .stage-placeholder h1 { font-size: 1.25rem; }
   .stage-placeholder p { font-size: 0.9rem; }
 }
+/* Per-style settings (sandman particles) */
+.effect-controls { display: flex; flex-wrap: wrap; gap: 0.6rem 1.25rem; align-items: center; justify-content: center; margin-top: 0.6rem; font-size: 0.9rem; }
+.effect-controls[hidden] { display: none; }
+.effect-controls-title { font-weight: 600; color: var(--ink-2); }
+.effect-controls input[type="range"] { width: 120px; vertical-align: middle; }
+.effect-controls .mono { display: inline-block; min-width: 3.2em; }
+.hue-range { appearance: none; -webkit-appearance: none; height: 10px; border-radius: 999px; background: linear-gradient(90deg, hsl(0,70%,60%), hsl(60,70%,60%), hsl(120,70%,60%), hsl(180,70%,60%), hsl(240,70%,60%), hsl(300,70%,60%), hsl(360,70%,60%)); }
+.hue-range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--sand, #fff); border: 2px solid var(--ink); }
+.hue-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--sand, #fff); border: 2px solid var(--ink); }
 .controls { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: center; justify-content: center; }
 .hint { text-align: center; color: var(--muted); font-size: 0.88rem; }
 .setting-help { text-align: center; color: var(--ink-2); font-size: 0.85rem; max-width: 70ch; margin: -0.25rem auto 0; min-height: 1.2em; }
