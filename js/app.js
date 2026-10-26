@@ -34,6 +34,7 @@ const OVERLAY_METRICS_KEY = 'kinesphere:replayOverlay';
 const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
+const HELP_KEY = 'kinesphere:dashHelp';
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -78,7 +79,8 @@ const state = {
   smoother: createSmoother(localStorage.getItem(SMOOTH_KEY) || DEFAULT_SMOOTHING, MAX_PEOPLE),
   handSmoother: createSmoother(localStorage.getItem(SMOOTH_KEY) || DEFAULT_SMOOTHING, MAX_PEOPLE, HAND_SIZE),
   lastPeople: null, lastPeopleAt: 0, lastRender: 0,
-  current: null,        // { session, analyses, person, saved, saveError }
+  current: null,        // { session, analyses, person, saved, saveError, compare: { a, b } | null }
+  compareCache: new Map(), compareToken: 0, compareChart: null,
   charts: [], replay: null,
   liveViewer: null, liveViewerPromise: null, liveBody: { torso: 0, floor: 0 },
   xr: { vr: false, ar: false, checked: false },
@@ -175,10 +177,10 @@ function syncSettingsUI() {
   const info = engineInfo(ui.selModel.value);
   const wanted = Number(ui.selPeople.value) || 1;
   if (wanted > info.maxPeople) ui.selPeople.value = String(info.maxPeople);
-  ui.selPeople.disabled = info.maxPeople === 1 || Boolean(state.recording);
+  ui.selPeople.disabled = Boolean(state.recording);
   const people = Number(ui.selPeople.value) || 1;
   let peopleNote;
-  if (info.maxPeople === 1) peopleNote = 'This model tracks one person only; pick MediaPipe or MoveNet MultiPose to track a group.';
+  if (info.maxPeople === 1) peopleNote = 'This model tracks one person only; choosing more people switches to MoveNet MultiPose.';
   else if (people > 1) peopleNote = `Tracking up to ${people} people: expect a lower frame rate, one dashboard tab per person, and pose control reacting to anyone's raised hands.`;
   else peopleNote = 'Tracking one person.';
   ui.settingHelp.textContent = `${info.help} ${peopleNote}`;
@@ -206,6 +208,20 @@ async function refreshCacheInfo() {
     ? `Downloaded models are kept in this browser so they load instantly next time: ${info.files} file${info.files === 1 ? '' : 's'}, ${fmtBytes(info.bytes)}.`
     : 'Downloaded models are kept in this browser so they load instantly next time. Nothing is cached yet.';
   ui.btnClearCache.hidden = !info.files;
+}
+
+const MULTI_MODEL = 'movenet-multipose';
+/**
+ * Choosing several people switches to MoveNet MultiPose: its built-in tracker keeps identities
+ * stable, where the other models only tell people apart by position and mix them up when they cross.
+ */
+function onPeopleChanged() {
+  const people = Number(ui.selPeople.value) || 1;
+  if (people > 1 && ui.selModel.value !== MULTI_MODEL) {
+    ui.selModel.value = MULTI_MODEL;
+    toast('Switched the model to MoveNet MultiPose, the best at keeping people apart. It has no 3D depth or hands; pick a MediaPipe model under Model if you need those.', 8000);
+  }
+  onSettingsChanged();
 }
 
 function onSettingsChanged() {
@@ -820,7 +836,8 @@ function stopRecording(trimBeforeT = null, { navigate = true, discard = false, n
 async function openSession(session, { save = false } = {}) {
   const analyses = Array.from({ length: session.people || 1 }, (_, p) => analyze(personView(session, p)));
   const person = Math.max(0, analyses.findIndex(a => a.ok));
-  const current = { session, analyses, person, saved: false, saveError: null };
+  const current = { session, analyses, person, saved: false, saveError: null, compare: null };
+  state.compareCache.clear();
   if (save) {
     try {
       await store.save(session);
@@ -884,12 +901,16 @@ function renderDashboard() {
   const people = session.people || 1;
   const fpsText = a.ok ? ` · ${a.fps.toFixed(0)} fps` : '';
   const triggerText = { pose: 'started by pose', button: 'started by button', game: 'danced in the game' }[session.trigger] ?? '';
-  const tabs = people > 1 ? `
+  const comparing = Boolean(state.current.compare);
+  const tabs = `
     <div class="person-tabs" role="tablist" aria-label="Person">
-      ${analyses.map((an, p) => `<button class="tab${p === person ? ' is-active' : ''}" role="tab" data-person="${p}" aria-selected="${p === person}">
+      ${people > 1
+        ? analyses.map((an, p) => `<button class="tab${p === person && !comparing ? ' is-active' : ''}" role="tab" data-person="${p}" aria-selected="${p === person && !comparing}">
         <i class="swatch" style="background:${personColors(p).left}"></i>Person ${p + 1}
-        <small>${an.ok ? `${fmtPct(an.validFraction)} tracked` : 'no data'}</small></button>`).join('')}
-    </div>` : '';
+        <small>${an.ok ? `${fmtPct(an.validFraction)} tracked` : 'no data'}</small></button>`).join('')
+        : `<button class="tab${comparing ? '' : ' is-active'}" role="tab" data-person="0" aria-selected="${!comparing}">This dancer</button>`}
+      <button class="tab tab-compare${comparing ? ' is-active' : ''}" role="tab" data-compare aria-selected="${comparing}" title="Compare two dancers: two people in this session, or someone from another saved session">⇄ Compare two dancers</button>
+    </div>`;
   const root = ui.views.dashboard;
   root.innerHTML = `
     <div class="dash-header">
@@ -898,6 +919,7 @@ function renderDashboard() {
         <div class="meta">${escapeHtml(fmtDate(session.createdAt))} · ${fmtDuration(session.durationMs)} · ${session.frameCount} frames${fpsText} · ${describeSession(session)}${triggerText ? ` · ${triggerText}` : ''}</div>
       </div>
       <div class="dash-actions">
+        <label class="check help-toggle" title="Show or hide the explanatory text under each panel"><input type="checkbox" id="show-help"> Explanations</label>
         <button class="btn" data-action="export-json">Export JSON</button>
         <button class="btn" data-action="export-csv">Export CSV</button>
         <button class="btn btn-ghost" data-action="delete">Delete</button>
@@ -930,8 +952,16 @@ function renderDashboard() {
       <p class="viewer3d-help" id="replay-3d-help" hidden>Drag to orbit, scroll or pinch to zoom, right-drag or two-finger drag to pan. Axes at the dancer's feet: <b style="color:#e34948">red x</b> = the dancer's left/right, <b style="color:#2ea043">green y</b> = up, <b style="color:#3987e5">blue z</b> = towards the camera (where you stand in VR). Grid squares are 0.5 m.</p>
     </section>
     ${tabs}
-    ${a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
+    ${comparing ? '<div id="compare-root"></div>'
+      : a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
   `;
+  const helpBox = root.querySelector('#show-help');
+  helpBox.checked = localStorage.getItem(HELP_KEY) !== 'off';
+  root.classList.toggle('hide-help', !helpBox.checked);
+  helpBox.addEventListener('change', () => {
+    localStorage.setItem(HELP_KEY, helpBox.checked ? 'on' : 'off');
+    root.classList.toggle('hide-help', !helpBox.checked);
+  });
 
   root.querySelector('#session-name').addEventListener('change', e => {
     const name = e.target.value.trim() || session.name;
@@ -952,14 +982,204 @@ function renderDashboard() {
     });
   };
   root.querySelector('[data-action="new"]').onclick = () => setView('live');
-  root.querySelectorAll('.person-tabs .tab').forEach(tab => {
-    tab.onclick = () => { state.current.person = Number(tab.dataset.person); renderDashboard(); };
+  root.querySelectorAll('.person-tabs .tab[data-person]').forEach(tab => {
+    tab.onclick = () => { state.current.compare = null; state.current.person = Number(tab.dataset.person); renderDashboard(); };
   });
+  root.querySelector('.person-tabs .tab[data-compare]').onclick = () => {
+    if (!state.current.compare) { state.current.compare = defaultCompare(); renderDashboard(); }
+  };
 
   const onTime = t => { for (const c of state.charts) c.setCursor?.(t); };
   state.replay = setupReplay(session, root, onTime, a.ok ? { analysis: a, person } : null);
   setupReplay3D(session, analyses, root, state.replay);
-  if (a.ok) mountCharts(a, session, root);
+  if (comparing) renderCompare(root);
+  else if (a.ok) mountCharts(a, session, root);
+}
+
+// ---------------------------------------------------------------------------------------
+// Compare two dancers: two people in this session, or someone from another saved session.
+
+/** Everyone who can be compared: { own: [...], others: [...] } of { key: 'sessionId:person', label }. */
+function compareChoices() {
+  const { session, analyses } = state.current;
+  const many = (session.people || 1) > 1;
+  const own = analyses.map((an, p) => ({ key: `${session.id}:${p}`, label: many ? `Person ${p + 1} (this session)` : `This session${session.name ? ` (${session.name})` : ''}` }));
+  const others = store.list().filter(m => m.id !== session.id).flatMap(m => Array.from({ length: m.people || 1 }, (_, p) => ({
+    key: `${m.id}:${p}`, label: `${m.name}${(m.people || 1) > 1 ? ` · Person ${p + 1}` : ''}`,
+  })));
+  return { own, others };
+}
+
+function defaultCompare() {
+  const { own, others } = compareChoices();
+  const first = own[state.current.person] ?? own[0];
+  const second = own.find(o => o.key !== first.key) ?? others[0] ?? null;
+  return { a: first.key, b: second?.key ?? null };
+}
+
+/** Load one dancer to compare: { session, a: analysis }, from this session or storage (cached). */
+async function loadCompareRef(key) {
+  const cut = key.lastIndexOf(':');
+  const id = key.slice(0, cut), p = Number(key.slice(cut + 1));
+  const { session, analyses } = state.current;
+  if (id === session.id) return { session, a: analyses[p] };
+  let entry = state.compareCache.get(id);
+  if (!entry) {
+    const loaded = await store.load(id);
+    if (!loaded) return null;
+    entry = { session: loaded, analyses: [] };
+    state.compareCache.set(id, entry);
+  }
+  entry.analyses[p] ??= analyze(personView(entry.session, p));
+  return { session: entry.session, a: entry.analyses[p] };
+}
+
+async function renderCompare(root) {
+  const host = root.querySelector('#compare-root');
+  if (!host) return;
+  const cmp = state.current.compare;
+  const { own, others } = compareChoices();
+  const all = [...own, ...others];
+  const options = selected => `<optgroup label="This session">${own.map(o => `<option value="${escapeHtml(o.key)}"${o.key === selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</optgroup>
+    ${others.length ? `<optgroup label="Other saved sessions">${others.map(o => `<option value="${escapeHtml(o.key)}"${o.key === selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</optgroup>` : ''}`;
+  host.innerHTML = `
+    <section class="card">
+      <h2>Compare two dancers</h2>
+      <p class="card-sub">Pick any two dancers: two people tracked in this session, or someone from another session saved in this browser. Every metric is worked out for each dancer separately (relative to their own body size), so people of different heights and recordings of different lengths can be compared fairly.</p>
+      <div class="compare-picker">
+        <label class="select"><span class="cmp-tag cmp-a">A</span><select id="cmp-a" aria-label="Dancer A">${options(cmp.a)}</select></label>
+        <label class="select"><span class="cmp-tag cmp-b">B</span><select id="cmp-b" aria-label="Dancer B">${cmp.b ? '' : '<option value="" selected>Choose a second dancer…</option>'}${options(cmp.b)}</select></label>
+      </div>
+    </section>
+    <div id="compare-body"></div>`;
+  host.querySelector('#cmp-a').onchange = e => { cmp.a = e.target.value; renderCompare(root); };
+  host.querySelector('#cmp-b').onchange = e => { cmp.b = e.target.value || null; renderCompare(root); };
+  const body = host.querySelector('#compare-body');
+  if (state.compareChart) { state.compareChart.destroy(); state.charts = state.charts.filter(c => c !== state.compareChart); state.compareChart = null; }
+  if (!cmp.b) {
+    body.innerHTML = `<div class="banner">${all.length < 2 ? 'There is only one dancer to compare. Track several people (People, in the Live view) or record or import another session, then come back here.' : 'Choose a second dancer above.'}</div>`;
+    return;
+  }
+  body.innerHTML = '<p class="meta">Loading…</p>';
+  const token = ++state.compareToken;
+  const [A, B] = await Promise.all([loadCompareRef(cmp.a), loadCompareRef(cmp.b)]);
+  if (token !== state.compareToken || !root.contains(body)) return; // a newer choice or view replaced this one
+  const labelOf = key => all.find(o => o.key === key)?.label ?? key;
+  const fail = [[A, cmp.a], [B, cmp.b]].find(([X]) => !X || !X.a.ok);
+  if (fail) {
+    body.innerHTML = `<div class="banner">Not enough pose data to compare ${escapeHtml(labelOf(fail[1]))}${fail[0]?.a.reason ? `: ${escapeHtml(fail[0].a.reason)}` : '.'}</div>`;
+    return;
+  }
+  A.label = labelOf(cmp.a); B.label = labelOf(cmp.b);
+  body.innerHTML = compareCards(A, B);
+  mountCompareCharts(A, B, body);
+}
+
+const tag = k => `<span class="cmp-tag cmp-${k}">${k.toUpperCase()}</span>`;
+
+function compareCards(A, B) {
+  const a = A.a, b = B.a;
+  const pct = v => (Number.isFinite(v) ? fmtPct(v) : '–');
+  const signed = (v, d) => { const r = Number(v.toFixed(d)); return r === 0 ? (0).toFixed(d) : `${r > 0 ? '+' : '−'}${Math.abs(r).toFixed(d)}`; };
+  const ptsDiff = (x, y) => (Number.isFinite(x) && Number.isFinite(y) ? `${signed((y - x) * 100, 0)} pts` : '');
+  const num = (v, d, unit = '') => (Number.isFinite(v) ? `${v.toFixed(d)}${unit}` : '–');
+  const numDiff = (x, y, d, unit = '') => (Number.isFinite(x) && Number.isFinite(y) ? `${signed(y - x, d)}${unit}` : '');
+  const mps = X => v => v * X.a.speed.metresPerTorso;
+  const top = X => X.a.body.joints.reduce((m, j) => (j.share > m.share ? j : m));
+  const perMin = X => X.a.space.travelled / Math.max(1e-6, X.session.durationMs / 60000);
+  const share = (key, X) => X.a.kinesphere.shares[key];
+  const rows = [
+    ['Duration', fmtDuration(A.session.durationMs), fmtDuration(B.session.durationMs), ''],
+    ['Pose tracked', pct(a.validFraction), pct(b.validFraction), ptsDiff(a.validFraction, b.validFraction)],
+    ...KINESPHERE_CLASSES.map(c => [`${c.label} kinesphere`, pct(share(c.key, A)), pct(share(c.key, B)), ptsDiff(share(c.key, A), share(c.key, B))]),
+    ['Left side of the body', pct(a.body.lateral.left), pct(b.body.lateral.left), ptsDiff(a.body.lateral.left, b.body.lateral.left)],
+    ['Right side of the body', pct(a.body.lateral.right), pct(b.body.lateral.right), ptsDiff(a.body.lateral.right, b.body.lateral.right)],
+    ...LEVELS.map(l => [`${l.label} level`, pct(a.levels.shares[l.key]), pct(b.levels.shares[l.key]), ptsDiff(a.levels.shares[l.key], b.levels.shares[l.key])]),
+    ['Most active body part', `${top(A).name} (${fmtPct(top(A).share)})`, `${top(B).name} (${fmtPct(top(B).share)})`, ''],
+    ['Mean speed', num(mps(A)(a.speed.mean), 2, ' m/s'), num(mps(B)(b.speed.mean), 2, ' m/s'), numDiff(mps(A)(a.speed.mean), mps(B)(b.speed.mean), 2, ' m/s')],
+    ['Peak speed', num(mps(A)(a.speed.peak), 2, ' m/s'), num(mps(B)(b.speed.peak), 2, ' m/s'), numDiff(mps(A)(a.speed.peak), mps(B)(b.speed.peak), 2, ' m/s')],
+    ['Floor area used', `${num(a.space.width, 1)} × ${num(a.space.depth, 1)} m`, `${num(b.space.width, 1)} × ${num(b.space.depth, 1)} m`, ''],
+    ['Distance travelled', num(a.space.travelled, 1, ' m'), num(b.space.travelled, 1, ' m'), numDiff(a.space.travelled, b.space.travelled, 1, ' m')],
+    ['Distance travelled per minute', num(perMin(A), 1, ' m'), num(perMin(B), 1, ' m'), numDiff(perMin(A), perMin(B), 1, ' m')],
+    ['Typical distance from camera', num(a.space.distance, 1, ' m'), num(b.space.distance, 1, ' m'), ''],
+  ];
+  const pair = (title, id) => `
+    <h3 class="cmp-row-title">${title}</h3>
+    <div><h3>${tag('a')}${escapeHtml(A.label)}</h3><div id="${id}-a"></div></div>
+    <div><h3>${tag('b')}${escapeHtml(B.label)}</h3><div id="${id}-b"></div></div>`;
+  return `
+    <section class="card">
+      <h2>At a glance</h2>
+      <p class="card-sub">Shares are of each dancer's own session. The last column is B minus A (percentage points for shares).</p>
+      <div class="table-scroll"><table class="data-table cmp-table">
+        <thead><tr><th>Measure</th><th class="num">${tag('a')}A</th><th class="num">${tag('b')}B</th><th class="num">B − A</th></tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="num diff">${r[3]}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </section>
+    <section class="card">
+      <h2>Kinesphere</h2>
+      <p class="card-sub">Share of time in a small, medium or large kinesphere, each measured against that dancer's own limb lengths.</p>
+      <div class="cmp-grid">
+        <div><h3>${tag('a')}${escapeHtml(A.label)}</h3><div id="cmp-kine-a"></div></div>
+        <div><h3>${tag('b')}${escapeHtml(B.label)}</h3><div id="cmp-kine-b"></div></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Body</h2>
+      <p class="card-sub">Which body parts moved, on which side, and at what level. Both activity figures share one colour scale, so the same colour means the same share of movement.</p>
+      <div class="cmp-grid">
+        ${pair('Body part activity', 'cmp-body')}
+        <div class="cmp-row-title"><div id="cmp-body-legend"></div><label class="check"><input type="checkbox" id="cmp-show-values"> Show values</label></div>
+        ${pair('Left / right', 'cmp-side')}
+        ${pair('Level: where was the activity?', 'cmp-level')}
+      </div>
+    </section>
+    <section class="card">
+      <h2>Speed</h2>
+      <p class="card-sub">Average joint speed over each session, in approximate metres per second, from the start of each recording.</p>
+      <div id="cmp-speed"></div>
+    </section>
+    <section class="card">
+      <h2>Path on the floor</h2>
+      <p class="card-sub">Both dancers' estimated paths from the bird's eye view, each from start (ring) to end (filled dot). For two sessions, positions are relative to each session's own camera.</p>
+      <div id="cmp-floor"></div>
+    </section>`;
+}
+
+function mountCompareCharts(A, B, root) {
+  const ord = ordinalColors();
+  for (const [X, k] of [[A, 'a'], [B, 'b']]) {
+    stackedBar(root.querySelector(`#cmp-kine-${k}`), KINESPHERE_CLASSES.map((c, i) => ({ label: c.label, value: X.a.kinesphere.shares[c.key], fill: ord[i].fill, ink: ord[i].ink })));
+    sideFigure(root.querySelector(`#cmp-side-${k}`), { pose: TEMPLATE_POSE, left: X.a.body.lateral.left, right: X.a.body.lateral.right });
+    levelsFigure(root.querySelector(`#cmp-level-${k}`), { pose: TEMPLATE_POSE, shares: X.a.levels.shares, labels: Object.fromEntries(LEVELS.map(l => [l.key, l.label])) });
+  }
+  const maxShare = Math.max(1e-6, ...[A, B].flatMap(X => X.a.body.joints.map(j => j.share)));
+  const showBox = root.querySelector('#cmp-show-values');
+  showBox.checked = localStorage.getItem(SHOW_VALUES_KEY) === 'on';
+  const drawBodies = () => {
+    for (const [X, k] of [[A, 'a'], [B, 'b']]) {
+      const joints = X.a.body.joints;
+      bodyFigure(root.querySelector(`#cmp-body-${k}`), {
+        pose: TEMPLATE_POSE, values: joints.map(j => j.share / maxShare), names: MAJOR_NAMES,
+        labels: showBox.checked ? joints.map(j => fmtPct(j.share)) : null,
+        tooltip: j => `${MAJOR_NAMES[j]}: ${fmtPct(joints[j].share, 1)} of all movement, active ${fmtPct(joints[j].activeTime)} of the time`,
+      });
+    }
+  };
+  showBox.addEventListener('change', () => { localStorage.setItem(SHOW_VALUES_KEY, showBox.checked ? 'on' : 'off'); drawBodies(); });
+  drawBodies();
+  root.querySelector('#cmp-body-legend').append(heatLegend('Less movement', 'More movement'));
+  const mps = X => X.a.speed.series.map(p => ({ t: p.t, v: p.v * X.a.speed.metresPerTorso }));
+  state.compareChart = lineChart(root.querySelector('#cmp-speed'), {
+    series: mps(A), color: 'var(--cmp-a)', label: `A: ${A.label}`,
+    extra: [{ series: mps(B), color: 'var(--cmp-b)', label: `B: ${B.label}` }],
+    xMax: Math.max(A.session.durationMs, B.session.durationMs), yLabel: 'Speed (m/s, approximate)', yUnit: 'm/s',
+  });
+  state.charts.push(state.compareChart);
+  floorPlot(root.querySelector('#cmp-floor'), {
+    fov: A.a.space.fov,
+    paths: [{ path: A.a.space.path, color: 'var(--cmp-a)', label: `A: ${A.label}` }, { path: B.a.space.path, color: 'var(--cmp-b)', label: `B: ${B.label}` }],
+  });
 }
 
 function setupReplay3D(session, analyses, root, replay) {
@@ -1515,7 +1735,7 @@ function init() {
   syncSettingsUI();
   renderModelMatrix();
   ui.selModel.addEventListener('change', onSettingsChanged);
-  ui.selPeople.addEventListener('change', onSettingsChanged);
+  ui.selPeople.addEventListener('change', onPeopleChanged);
   ui.btnHelp.addEventListener('click', () => {
     ui.helpPanel.open = !ui.helpPanel.open;
     ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open));

@@ -1,4 +1,6 @@
 :root {
+  --cmp-a: #2a78d6;
+  --cmp-b: #eb6834;
   color-scheme: light;
   --bg: #f9f9f7;
   --surface: #fcfcfb;
@@ -21,6 +23,8 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    --cmp-a: #3987e5;
+    --cmp-b: #d95926;
     color-scheme: dark;
     --bg: #0d0d0d;
     --surface: #1a1a19;
@@ -42,6 +46,8 @@
   }
 }
 :root[data-theme="dark"] {
+  --cmp-a: #3987e5;
+  --cmp-b: #d95926;
   color-scheme: dark;
   --bg: #0d0d0d;
   --surface: #1a1a19;
@@ -435,3 +441,27 @@ select, input[type="text"] {
   .game-how { font-size: 0.82rem; }
   .game-result-score { font-size: 1.7rem; }
 }
+
+/* Dashboard: hideable explanations */
+.hide-help .card-sub, .hide-help .fine, .hide-help .viewer3d-help { display: none; }
+.help-toggle { white-space: nowrap; }
+
+/* Series legend (comparisons) */
+.viz-series-legend { gap: 0.4rem 1.2rem; color: var(--ink-2); }
+.viz-series-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.viz-series-legend i { display: inline-block; width: 18px; height: 4px; border-radius: 2px; }
+
+/* Compare two dancers */
+.person-tabs .tab-compare { margin-left: auto; }
+.compare-picker { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; }
+.compare-picker select { max-width: min(100%, 26rem); }
+.cmp-tag { display: inline-flex; align-items: center; justify-content: center; width: 1.5em; height: 1.5em; border-radius: 50%; color: #fff; font-weight: 700; font-size: 0.8em; margin-right: 0.35em; flex: none; }
+.cmp-a { background: var(--cmp-a); }
+.cmp-b { background: var(--cmp-b); }
+.cmp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; align-items: start; }
+.cmp-grid h3 { display: flex; align-items: center; margin: 0.2rem 0 0.4rem; font-size: 0.95rem; }
+.cmp-grid .viz-figure { max-height: 300px; }
+.cmp-row-title { grid-column: 1 / -1; margin: 0.8rem 0 0; font-size: 1rem; }
+.cmp-table td.num, .cmp-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.cmp-table .diff { color: var(--muted); }
+@media (max-width: 640px) { .cmp-grid { grid-template-columns: 1fr; } }

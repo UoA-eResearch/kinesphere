@@ -51,6 +51,14 @@ export function heatLegend(low = 'Less', high = 'More') {
   return el;
 }
 
+/** Legend for categorical series: a coloured line swatch and a label (text stays in ink colours). */
+export function seriesLegend(items) {
+  const el = document.createElement('div');
+  el.className = 'viz-legend viz-series-legend';
+  el.innerHTML = items.map(it => `<span><i style="background:${it.color}"></i>${escapeHtml(it.label ?? '')}</span>`).join('');
+  return el;
+}
+
 // ---- tooltip ------------------------------------------------------------------------
 
 let tip = null;
@@ -111,7 +119,8 @@ function nearestByT(series, t) {
  * Single-series line chart with a hairline grid, crosshair + tooltip.
  * series: [{ t (ms), v }]. Returns { setCursor(tMs|null), destroy() }.
  */
-export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUnit = '', yFormat = v => v.toFixed(2), tipFormat = null, xMax, height = 220 }) {
+export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUnit = '', yFormat = v => v.toFixed(2), tipFormat = null, xMax, height = 220, color = null, label = null, extra = [] }) {
+  // `extra`: more series drawn as plain lines, [{ series, color, label }], with a legend
   container.classList.add('viz-line');
   let scales = null, cursorLine = null, cursorDot = null, cursorT = null;
 
@@ -135,8 +144,9 @@ export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUn
     const yTicks = 4;
     let vMax = fixedYMax;
     if (vMax == null) {
-      const step = niceCeil(Math.max(0.01, ...series.map(p => p.v)) * 1.05 / yTicks);
-      vMax = step * Math.ceil(Math.max(0.01, ...series.map(p => p.v)) * 1.05 / step);
+      const top = Math.max(0.01, ...series.map(p => p.v), ...extra.flatMap(e => e.series.map(p => p.v)));
+      const step = niceCeil(top * 1.05 / yTicks);
+      vMax = step * Math.ceil(top * 1.05 / step);
     }
     const sx = t => m.l + (t / tMax) * pw;
     const sy = v => m.t + ph - (clamp(v, 0, vMax) / vMax) * ph;
@@ -156,12 +166,16 @@ export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUn
     }
     if (yLabel) root.append(svg('text', { x: m.l, y: 12, class: 'viz-label' }, [yLabel]));
 
+    const pathOf = ser => ser.map((p, i) => `${i ? 'L' : 'M'}${sx(p.t).toFixed(1)},${sy(p.v).toFixed(1)}`).join('');
     if (series.length) {
-      const d = series.map((p, i) => `${i ? 'L' : 'M'}${sx(p.t).toFixed(1)},${sy(p.v).toFixed(1)}`).join('');
-      const area = `${d}L${sx(series[series.length - 1].t).toFixed(1)},${sy(0)}L${sx(series[0].t).toFixed(1)},${sy(0)}Z`;
-      root.append(svg('path', { d: area, class: 'viz-area' }));
-      root.append(svg('path', { d, class: 'viz-line-path' }));
+      const d = pathOf(series);
+      if (!extra.length) {
+        const area = `${d}L${sx(series[series.length - 1].t).toFixed(1)},${sy(0)}L${sx(series[0].t).toFixed(1)},${sy(0)}Z`;
+        root.append(svg('path', { d: area, class: 'viz-area' }));
+      }
+      root.append(svg('path', { d, class: 'viz-line-path', style: color ? `stroke:${color}` : null }));
     }
+    for (const e of extra) if (e.series.length) root.append(svg('path', { d: pathOf(e.series), class: 'viz-line-path', style: `stroke:${e.color}` }));
     cursorLine = svg('line', { class: 'viz-cursor', y1: m.t, y2: m.t + ph, style: 'display:none' });
     cursorDot = svg('circle', { r: 4.5, class: 'viz-cursor-dot', style: 'display:none' });
     root.append(cursorLine, cursorDot);
@@ -174,11 +188,15 @@ export function lineChart(container, { series, yMax: fixedYMax, yLabel = '', yUn
       const p = nearestByT(series, t);
       if (!p) return;
       positionCursor(p.t);
-      showTip(e.clientX, e.clientY, `<b>${fmtClock(p.t)}</b><br>${tipFormat ? escapeHtml(tipFormat(p.v)) : `${yFormat(p.v)}${yUnit ? ` ${escapeHtml(yUnit)}` : ''}`}`);
+      const fmtV = v => (tipFormat ? escapeHtml(tipFormat(v)) : `${yFormat(v)}${yUnit ? ` ${escapeHtml(yUnit)}` : ''}`);
+      const rows = [`${label ? `${escapeHtml(label)}: ` : ''}${fmtV(p.v)}`];
+      for (const ex of extra) { const q = nearestByT(ex.series, p.t); if (q && Math.abs(q.t - p.t) < tMax / 50) rows.push(`${escapeHtml(ex.label)}: ${fmtV(q.v)}`); }
+      showTip(e.clientX, e.clientY, `<b>${fmtClock(p.t)}</b><br>${rows.join('<br>')}`);
     });
     hit.addEventListener('pointerleave', () => { hideTip(); positionCursor(cursorT); });
     root.append(hit);
     container.append(root);
+    if (extra.length) container.append(seriesLegend([{ label, color }, ...extra]));
     positionCursor(cursorT);
   }
 
@@ -260,10 +278,13 @@ export function heatGrid(container, { values, rowLabels, colLabels, format = v =
  * estimated path (coloured start to end), and shaded 0.25 m cells where they spent the most time.
  * x is metres to the dancer's right as they face the camera, z metres from the camera.
  */
-export function floorPlot(container, { path, cells, fov, durationMs }) {
+export function floorPlot(container, { path = [], cells = [], fov, durationMs, paths = null }) {
+  // `paths`: compare several dancers, [{ path, color, label }], each drawn in one colour
   container.classList.add('viz-floor-wrap');
   container.replaceChildren();
-  const pts = path.filter(p => Number.isFinite(p.x) && Number.isFinite(p.z));
+  const finite = ps => ps.filter(p => Number.isFinite(p.x) && Number.isFinite(p.z));
+  const series = paths ? paths.map(s => ({ ...s, pts: finite(s.path) })) : null;
+  const pts = series ? series.flatMap(s => s.pts) : finite(path);
   const tanH = Math.tan((fov / 2) * Math.PI / 180);
   let xHalf = 1.5, zMax = 3;
   for (const p of pts) { xHalf = Math.max(xHalf, Math.abs(p.x) + 0.5); zMax = Math.max(zMax, p.z + 0.6); }
@@ -313,18 +334,29 @@ export function floorPlot(container, { path, cells, fov, durationMs }) {
   const cx = X(0), cy = Z(0);
   root.append(svg('rect', { x: cx - 22, y: cy - 30, width: 44, height: 26, rx: 5, class: 'viz-camera' }));
   root.append(svg('text', { x: cx + 32, y: cy - 10, class: 'viz-label' }, ['Camera']));
-  // path
-  const T = Math.max(1, durationMs || (pts.length ? pts[pts.length - 1].t : 1));
-  const g = svg('g', { 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none', style: 'pointer-events:none' });
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i];
-    g.append(svg('line', { x1: X(a.x), y1: Z(a.z), x2: X(b.x), y2: Z(b.z), stroke: heat(b.t / T).fill }));
-  }
-  root.append(g);
-  if (pts.length) {
-    const s0 = pts[0], e = pts[pts.length - 1];
-    root.append(svg('circle', { cx: X(s0.x), cy: Z(s0.z), r: 9, class: 'viz-start' }));
-    root.append(svg('circle', { cx: X(e.x), cy: Z(e.z), r: 9, style: `fill:${heat(1).fill}`, class: 'viz-end' }));
+  // path(s)
+  if (series) {
+    for (const s of series) {
+      if (!s.pts.length) continue;
+      const d = s.pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)},${Z(p.z).toFixed(1)}`).join('');
+      root.append(svg('path', { d, fill: 'none', 'stroke-width': 4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', style: `stroke:${s.color};stroke-opacity:0.85;pointer-events:none` }));
+      const s0 = s.pts[0], e = s.pts[s.pts.length - 1];
+      root.append(svg('circle', { cx: X(s0.x), cy: Z(s0.z), r: 9, class: 'viz-start', style: `stroke:${s.color}` }));
+      root.append(svg('circle', { cx: X(e.x), cy: Z(e.z), r: 9, style: `fill:${s.color}`, class: 'viz-end' }));
+    }
+  } else {
+    const T = Math.max(1, durationMs || (pts.length ? pts[pts.length - 1].t : 1));
+    const g = svg('g', { 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none', style: 'pointer-events:none' });
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      g.append(svg('line', { x1: X(a.x), y1: Z(a.z), x2: X(b.x), y2: Z(b.z), stroke: heat(b.t / T).fill }));
+    }
+    root.append(g);
+    if (pts.length) {
+      const s0 = pts[0], e = pts[pts.length - 1];
+      root.append(svg('circle', { cx: X(s0.x), cy: Z(s0.z), r: 9, class: 'viz-start' }));
+      root.append(svg('circle', { cx: X(e.x), cy: Z(e.z), r: 9, style: `fill:${heat(1).fill}`, class: 'viz-end' }));
+    }
   }
   root.append(svg('text', { x: pad.l, y: H - 6, class: 'viz-tick' }, ["← dancer's left"]));
   root.append(svg('text', { x: pad.l + pw, y: H - 6, class: 'viz-tick', 'text-anchor': 'end' }, ["dancer's right →"]));
@@ -333,19 +365,21 @@ export function floorPlot(container, { path, cells, fov, durationMs }) {
     if (!pts.length) return;
     const r = root.getBoundingClientRect(), sc = r.width / W;
     const mx = (e.clientX - r.left) / sc, my = (e.clientY - r.top) / sc;
-    let best = null, bd = Infinity;
-    for (const p of pts) {
-      const d = Math.hypot(X(p.x) - mx, Z(p.z) - my);
-      if (d < bd) { bd = d; best = p; }
+    let best = null, bd = Infinity, who = null;
+    for (const s of series ?? [{ pts, label: null }]) {
+      for (const p of s.pts) {
+        const d = Math.hypot(X(p.x) - mx, Z(p.z) - my);
+        if (d < bd) { bd = d; best = p; who = s.label; }
+      }
     }
     if (best && bd < 30) {
       const side = Math.abs(best.x) < 0.05 ? 'centre' : `${Math.abs(best.x).toFixed(1)} m to the ${best.x > 0 ? 'right' : 'left'}`;
-      showTip(e.clientX, e.clientY, `<b>${fmtClock(best.t)}</b><br>${best.z.toFixed(1)} m from the camera · ${side}`);
+      showTip(e.clientX, e.clientY, `<b>${who ? `${escapeHtml(who)} · ` : ''}${fmtClock(best.t)}</b><br>${best.z.toFixed(1)} m from the camera · ${side}`);
     } else hideTip();
   });
   hit.addEventListener('pointerleave', hideTip);
   root.append(hit);
-  container.append(root, heatLegend('Start', 'End'));
+  container.append(root, series ? seriesLegend(series) : heatLegend('Start', 'End'));
 }
 
 // ---- stick figure ---------------------------------------------------------------------
