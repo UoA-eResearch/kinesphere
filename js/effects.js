@@ -1,6 +1,7 @@
 // Alternative ways of drawing the detected pose: plain skeleton, stick figure, neon glow,
-// light trails, sparks (particles) and a constellation. Every style exposes
-//   draw(ctx, lm, offset, width, height, dt, { mirror, minVis })
+// light trails, sparks (particles), a constellation, sandman, fuzzy blur, origami and pencil.
+// Every style exposes
+//   draw(ctx, lm, offset, width, height, dt, { mirror, minVis, person, videoVisible, ... })
 // and keeps its own state (particles, trails) so it animates smoothly between detections.
 
 import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton, drawHandSkeleton, drawFaceContours } from './pose.js';
@@ -25,6 +26,8 @@ export const STYLES = [
   { id: 'constellation', label: 'Constellation' },
   { id: 'sandman', label: 'Sandman (falling particles)' },
   { id: 'fuzzy', label: 'Fuzzy blur' },
+  { id: 'origami', label: 'Origami (paper)' },
+  { id: 'pencil', label: 'Pencil sketch' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -562,6 +565,237 @@ function sandmanStyle() {
   };
 }
 
+// ---- shared helpers for the paper styles ----
+
+/** Lighten (k > 0, towards white) or darken (k < 0, towards black) a #rrggbb colour. */
+function shadeHex(hex, k) {
+  const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const out = c.map(v => Math.round(k >= 0 ? v + (255 - v) * k : v * (1 + k)));
+  return `rgb(${out.join(',')})`;
+}
+/** Small deterministic PRNG, so hand-drawn wobble is stable between frames. */
+function seeded(seed) {
+  let a = (seed * 2654435761) >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/** Torso length in px, the size unit for the paper styles. */
+function torsoPx(p) {
+  return Math.hypot((p.x[11] + p.x[12] - p.x[23] - p.x[24]) / 2, (p.y[11] + p.y[12] - p.y[23] - p.y[24]) / 2);
+}
+
+// ---- origami: the body folded from paper, each limb a creased kite of two shaded facets ----
+
+function origamiStyle() {
+  const LIGHT = -Math.PI * 0.75; // light from the upper left
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0 } = opts;
+      if (!lm) return;
+      const p = project(lm, offset, w, h, mirror);
+      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      const pc = personColors(person);
+      const paper = { left: pc.left, right: pc.right, mid: '#efe6d2' };
+      const T = torsoPx(p);
+      const polys = []; // { pts, fill }
+      const lit = (ang, side) => 0.5 + 0.5 * Math.cos(ang + side * Math.PI / 2 - LIGHT); // 0..1 facing the light
+      const facet = (pts, base, light) => polys.push({ pts, fill: shadeHex(base, -0.35 + 0.55 * light) });
+      const ok = (...ids) => ids.every(i => p.v[i] >= minVis);
+      // a limb segment: a kite folded along the bone, widest a third of the way down
+      const kite = (a, b, width, base, at = 0.33) => {
+        if (!ok(a, b)) return;
+        const dx = p.x[b] - p.x[a], dy = p.y[b] - p.y[a], len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len, ang = Math.atan2(dy, dx);
+        const mx = p.x[a] + dx * at, my = p.y[a] + dy * at;
+        const A = [p.x[a] - dx / len * width * 0.4, p.y[a] - dy / len * width * 0.4], B = [p.x[b], p.y[b]];
+        facet([A, [mx + nx * width, my + ny * width], B], base, lit(ang, 1));
+        facet([A, B, [mx - nx * width, my - ny * width]], base, lit(ang, -1));
+      };
+      // a pointed tip (hand / foot) continuing a segment's direction
+      const tip = (a, b, length, width, base) => {
+        if (!ok(a, b)) return;
+        const dx = p.x[b] - p.x[a], dy = p.y[b] - p.y[a], len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len, ang = Math.atan2(dy, dx);
+        const end = [p.x[b] + ux * length, p.y[b] + uy * length];
+        facet([[p.x[b] - uy * width, p.y[b] + ux * width], end, [p.x[b], p.y[b]]], base, lit(ang, 1));
+        facet([[p.x[b], p.y[b]], end, [p.x[b] + uy * width, p.y[b] - ux * width]], base, lit(ang, -1));
+      };
+      // legs behind the body
+      kite(23, 25, T * 0.2, paper.left); kite(25, 27, T * 0.16, paper.left); tip(25, 27, T * 0.22, T * 0.08, paper.left);
+      kite(24, 26, T * 0.2, paper.right); kite(26, 28, T * 0.16, paper.right); tip(26, 28, T * 0.22, T * 0.08, paper.right);
+      // torso: four facets folded towards a centre point
+      const S = [[p.x[11], p.y[11]], [p.x[12], p.y[12]]], H = [[p.x[24], p.y[24]], [p.x[23], p.y[23]]];
+      const c = [(S[0][0] + S[1][0] + H[0][0] + H[1][0]) / 4, (S[0][1] + S[1][1] + H[0][1] + H[1][1]) / 4 + T * 0.05];
+      const ring = [S[0], S[1], H[0], H[1]];
+      const sides = [-Math.PI / 2, 0, Math.PI / 2, Math.PI]; // top, right, bottom, left facets
+      for (let i = 0; i < 4; i++) facet([ring[i], ring[(i + 1) % 4], c], paper.mid, 0.5 + 0.5 * Math.cos(sides[i] - LIGHT));
+      // arms in front
+      kite(11, 13, T * 0.17, paper.left); kite(13, 15, T * 0.14, paper.left); tip(13, 15, T * 0.2, T * 0.09, paper.left);
+      kite(12, 14, T * 0.17, paper.right); kite(14, 16, T * 0.14, paper.right); tip(14, 16, T * 0.2, T * 0.09, paper.right);
+      // head: a folded hexagon with a pointed chin
+      const head = neckAndHead(p, minVis);
+      if (head) {
+        const r = head.r * 1.1, tilt = Math.atan2(head.hy - head.ny, head.hx - head.nx) + Math.PI / 2;
+        const pts = Array.from({ length: 6 }, (_, i) => {
+          const a = tilt + (i / 6) * Math.PI * 2 - Math.PI / 2;
+          const rr = i === 3 ? r * 1.25 : r; // chin
+          return [head.hx + Math.cos(a) * rr, head.hy + Math.sin(a) * rr];
+        });
+        facet([[head.nx, head.ny], [head.hx - r * 0.3, head.hy + r * 0.6], [head.hx + r * 0.3, head.hy + r * 0.6]], paper.mid, 0.3);
+        for (let i = 0; i < 6; i++) {
+          const a = tilt + ((i + 0.5) / 6) * Math.PI * 2 - Math.PI / 2;
+          facet([pts[i], pts[(i + 1) % 6], [head.hx, head.hy]], paper.mid, 0.5 + 0.5 * Math.cos(a - LIGHT));
+        }
+      }
+      const path = pts => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
+      ctx.save();
+      ctx.lineJoin = 'round';
+      // soft drop shadow so the paper seems to stand off the background
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      const off = Math.max(2, T * 0.05);
+      for (const q of polys) { path(q.pts.map(([x, y]) => [x + off * 0.6, y + off])); ctx.fill(); }
+      // facets with thin crease lines
+      ctx.lineWidth = Math.max(0.75, w / 1400);
+      ctx.strokeStyle = 'rgba(60,45,30,0.35)';
+      for (const q of polys) { path(q.pts); ctx.fillStyle = q.fill; ctx.fill(); ctx.stroke(); }
+      ctx.restore();
+      drawExtras(ctx, w, h, opts, 'full');
+    },
+    reset() {},
+  };
+}
+
+// ---- pencil: a loose graphite sketch with doubled contours, hatching and a gentle line boil ----
+
+const paperCache = new Map();
+/** An off-white paper sheet with a little grain, cached per size. */
+function paperSheet(w, h) {
+  const key = `${w}x${h}`;
+  let c = paperCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#f4f0e6';
+  g.fillRect(0, 0, w, h);
+  const rnd = seeded(7);
+  for (let i = 0; i < (w * h) / 60; i++) {
+    g.fillStyle = `rgba(${rnd() < 0.5 ? '120,105,80' : '255,255,255'},${(rnd() * 0.12).toFixed(3)})`;
+    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
+  }
+  const vig = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, 'rgba(90,70,40,0.12)');
+  g.fillStyle = vig; g.fillRect(0, 0, w, h);
+  paperCache.clear();
+  paperCache.set(key, c);
+  return c;
+}
+
+function pencilStyle() {
+  const BOIL = 0.14; // s between redraws of the wobble, like hand-drawn animation
+  let clock = 0;
+  const LIMBS = [[11, 13, 0.11], [13, 15, 0.09], [12, 14, 0.11], [14, 16, 0.09], [23, 25, 0.14], [25, 27, 0.11], [24, 26, 0.14], [26, 28, 0.11]];
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
+      clock += dt;
+      // without a camera picture behind, draw on paper (once, by the first person's effect)
+      if (!videoVisible && person === 0) ctx.drawImage(paperSheet(w, h), 0, 0);
+      if (!lm) return;
+      const p = project(lm, offset, w, h, mirror);
+      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      const T = torsoPx(p);
+      const frame = Math.floor(clock / BOIL);
+      const rnd = seeded(frame * 97 + person * 13 + 1);
+      const jit = a => (rnd() - 0.5) * 2 * a;
+      const graphite = videoVisible ? 'rgba(25,25,28,' : 'rgba(45,42,40,';
+      const lw = Math.max(1, T / 70);
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      // one pencil stroke: a slightly bowed line that overshoots its ends a little
+      const stroke = (x1, y1, x2, y2, alpha = 0.75, width = lw) => {
+        const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len, wob = Math.min(T * 0.025, len * 0.04);
+        const o1 = jit(T * 0.04), o2 = T * 0.03 + jit(T * 0.05);
+        const sx = x1 - ux * o1 + jit(wob), sy = y1 - uy * o1 + jit(wob);
+        const ex = x2 + ux * o2 + jit(wob), ey = y2 + uy * o2 + jit(wob);
+        const bow = jit(len * 0.03);
+        if (videoVisible) { // a pale under-stroke keeps graphite readable over dark clothes
+          ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = width * 2.6;
+          ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo((sx + ex) / 2 - uy * bow, (sy + ey) / 2 + ux * bow, ex, ey); ctx.stroke();
+        }
+        ctx.strokeStyle = `${graphite}${(alpha * (0.75 + rnd() * 0.25)).toFixed(3)})`;
+        ctx.lineWidth = width * (0.8 + rnd() * 0.4);
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo((sx + ex) / 2 - uy * bow, (sy + ey) / 2 + ux * bow, ex, ey); ctx.stroke();
+      };
+      // a loose sketched ellipse, drawn twice
+      const loop = (cx, cy, rx, ry, rot = 0) => {
+        for (let k = 0; k < 2; k++) {
+          ctx.strokeStyle = `${graphite}${(0.55 + rnd() * 0.25).toFixed(3)})`;
+          ctx.lineWidth = lw * (0.8 + rnd() * 0.4);
+          ctx.beginPath();
+          const a0 = rnd() * Math.PI * 2, sweep = Math.PI * 2 * (1.04 + rnd() * 0.1);
+          for (let i = 0; i <= 28; i++) {
+            const a = a0 + sweep * i / 28, e = 1 + jit(0.04);
+            const x = Math.cos(a) * rx * e, y = Math.sin(a) * ry * e;
+            const px = cx + x * Math.cos(rot) - y * Math.sin(rot), py = cy + x * Math.sin(rot) + y * Math.cos(rot);
+            if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+          }
+          ctx.stroke();
+        }
+      };
+      // torso: sketched outline with diagonal hatching
+      const tor = [[p.x[11], p.y[11]], [p.x[12], p.y[12]], [p.x[24], p.y[24]], [p.x[23], p.y[23]]];
+      ctx.save();
+      ctx.beginPath(); tor.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+      ctx.clip();
+      const xs = tor.map(q => q[0]), ys = tor.map(q => q[1]);
+      const x0 = Math.min(...xs) - T, x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys) + T;
+      const gap = Math.max(4, T / 9);
+      for (let x = x0; x < x1 + T; x += gap) stroke(x, y0, x + (y1 - y0), y1, 0.28, lw * 0.7);
+      ctx.restore();
+      for (let i = 0; i < 4; i++) {
+        const [a, b] = [tor[i], tor[(i + 1) % 4]];
+        stroke(a[0], a[1], b[0], b[1], 0.8);
+        if (rnd() < 0.6) stroke(a[0], a[1], b[0], b[1], 0.45);
+      }
+      // limbs: two contour lines either side of the bone, with sketched joints
+      for (const [a, b, thick] of LIMBS) {
+        if (p.v[a] < minVis || p.v[b] < minVis) continue;
+        const dx = p.x[b] - p.x[a], dy = p.y[b] - p.y[a], len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len, r0 = thick * T, r1 = thick * T * 0.8;
+        stroke(p.x[a] + nx * r0, p.y[a] + ny * r0, p.x[b] + nx * r1, p.y[b] + ny * r1);
+        stroke(p.x[a] - nx * r0, p.y[a] - ny * r0, p.x[b] - nx * r1, p.y[b] - ny * r1);
+        if (rnd() < 0.5) stroke(p.x[a] + nx * r0 * 0.4, p.y[a] + ny * r0 * 0.4, p.x[b] + nx * r1 * 0.4, p.y[b] + ny * r1 * 0.4, 0.25, lw * 0.6); // shading
+        if (b === 13 || b === 14 || b === 25 || b === 26) loop(p.x[b], p.y[b], r1 * 0.9, r1 * 0.9);
+      }
+      // hands and feet: small ovals / wedges
+      for (const [a, b, s2] of [[13, 15, 0.1], [14, 16, 0.1]]) {
+        if (p.v[a] < minVis || p.v[b] < minVis) continue;
+        const ang = Math.atan2(p.y[b] - p.y[a], p.x[b] - p.x[a]);
+        loop(p.x[b] + Math.cos(ang) * T * s2, p.y[b] + Math.sin(ang) * T * s2, T * 0.12, T * 0.08, ang);
+      }
+      for (const k of [27, 28]) if (p.v[k] >= minVis) { stroke(p.x[k], p.y[k], p.x[k] + (k === 27 ? -1 : 1) * T * 0.04, p.y[k] + T * 0.1, 0.8); stroke(p.x[k] - T * 0.08, p.y[k] + T * 0.1, p.x[k] + T * 0.12, p.y[k] + T * 0.1, 0.8); }
+      // head and neck
+      const head = neckAndHead(p, minVis);
+      if (head) {
+        stroke(head.nx - T * 0.04, head.ny, head.hx - T * 0.04, head.hy + head.r * 0.9, 0.7);
+        stroke(head.nx + T * 0.04, head.ny, head.hx + T * 0.04, head.hy + head.r * 0.9, 0.7);
+        loop(head.hx, head.hy, head.r * 0.95, head.r * 1.15, Math.atan2(head.hy - head.ny, head.hx - head.nx) + Math.PI / 2);
+      }
+      ctx.restore();
+      drawExtras(ctx, w, h, opts, 'ghost');
+    },
+    reset() { clock = 0; },
+  };
+}
+
 // ---- fuzzy blur: a soft, out-of-focus glow of the body that smears with motion ----
 
 const blobSprites = new Map();
@@ -648,7 +882,7 @@ function fuzzyStyle() {
   };
 }
 
-const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle };
+const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle };
 
 export function createEffect(id) {
   const factory = FACTORIES[id] ?? FACTORIES[DEFAULT_STYLE];

@@ -647,7 +647,7 @@ function renderOverlay(now) {
   if (state.liveViewer) state.liveViewer.setPeople(slots?.map(pose => pose && { lm: pose.lm, offset: 0 }) ?? null, minVis);
   state.effects.forEach((effect, p) => {
     const pose = slots?.[p] ?? null;
-    effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours });
+    effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours, videoVisible: state.showVideo });
   });
   if (slots && state.detector.people > 1) {
     const mirrorText = state.mirrored || game.isPlaying; // the game always shows the player mirrored
@@ -1342,11 +1342,11 @@ function setupReplay(session, root, onTime, metrics = null) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p }); continue; }
+      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false }); continue; }
       const shown = smoother.apply(lm, offset, p, dt);
       const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
       poses3d[p] = { lm: shown, offset: 0 };
-      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, hands });
+      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false, hands });
       if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
     }
     if (showMetrics && hasFrame && poses3d[metrics.person]) {
