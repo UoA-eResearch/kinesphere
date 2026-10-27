@@ -64,6 +64,25 @@ export function unpackPoses(buffer) {
   return poses;
 }
 
+/** Pack 3D world landmarks (13 joints x 3, metres; null = none) as int16 millimetre-tenths. */
+export function packWorlds(worlds) {
+  const out = new Int16Array(worlds.length * 39);
+  worlds.forEach((w, p) => { if (w) for (let i = 0; i < 39; i++) out[p * 39 + i] = Math.max(-32767, Math.min(32767, Math.round((w[i] || 0) * 10000))); });
+  return out.buffer;
+}
+export function unpackWorlds(buffer, n) {
+  if (!buffer) return [];
+  const a = new Int16Array(buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  const out = [];
+  for (let p = 0; p < n && (p + 1) * 39 <= a.length; p++) {
+    const w = new Float32Array(39);
+    let any = false;
+    for (let i = 0; i < 39; i++) { w[i] = a[p * 39 + i] / 10000; if (w[i]) any = true; }
+    out.push(any ? w : null);
+  }
+  return out;
+}
+
 /** A room code: 10 characters a person can read out (no 0/o, 1/l). */
 export function makeRoomCode() {
   const abc = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -151,8 +170,9 @@ export function createSession({ onPeers, onPose, onStatus }) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.t === 'hello') { entry.name = cleanName(msg.name); hostRoster(); return; }
       if (msg.t === 'pose' && msg.b) {
-        onPose?.(conn.peer, unpackPoses(msg.b), Number(msg.a) || 16 / 9);
-        const relay = { t: 'pose', id: conn.peer, a: msg.a, b: msg.b }; // id set by the host, so it can't be spoofed
+        const poses = unpackPoses(msg.b);
+        onPose?.(conn.peer, poses, Number(msg.a) || 16 / 9, unpackWorlds(msg.w, poses.length));
+        const relay = { t: 'pose', id: conn.peer, a: msg.a, b: msg.b, ...(msg.w ? { w: msg.w } : {}) }; // id set by the host, so it can't be spoofed
         for (const [id, other] of conns) if (id !== conn.peer) safeSend(other.conn, relay);
       }
     });
@@ -180,7 +200,10 @@ export function createSession({ onPeers, onPose, onStatus }) {
         announce();
         return;
       }
-      if (msg.t === 'pose' && msg.b) onPose?.(String(msg.id || conn.peer), unpackPoses(msg.b), Number(msg.a) || 16 / 9);
+      if (msg.t === 'pose' && msg.b) {
+        const poses = unpackPoses(msg.b);
+        onPose?.(String(msg.id || conn.peer), poses, Number(msg.a) || 16 / 9, unpackWorlds(msg.w, poses.length));
+      }
     });
     conn.on('close', () => { if (!ended) leave('The host ended the session.'); });
     conn.on('error', () => { if (!ended) leave('The connection to the host was lost.'); });
@@ -241,13 +264,14 @@ export function createSession({ onPeers, onPose, onStatus }) {
     connectTimer = setTimeout(() => { if (!conn.open) leave('Could not connect to the host. Their network may block direct connections; try again, or from another network.'); }, CONNECT_TIMEOUT_MS);
   }
 
-  /** Send my current poses (throttled); call with every detection. */
-  function sendPoses(poses, now = performance.now()) {
+  /** Send my current poses (and 3D world landmarks where the model gives them; throttled). */
+  function sendPoses(poses, now = performance.now(), worlds = null) {
     if (!peer || ended || !conns.size) return;
     const quiet = !poses.length;
     if (now - lastSent < (quiet ? KEEPALIVE_MS : SEND_INTERVAL_MS)) return;
     lastSent = now;
     const msg = { t: 'pose', id: peer.id, a: myAspect, b: packPoses(poses.slice(0, 6)) };
+    if (worlds?.some(Boolean)) msg.w = packWorlds(worlds.slice(0, 6));
     for (const { conn } of conns.values()) safeSend(conn, msg);
   }
 

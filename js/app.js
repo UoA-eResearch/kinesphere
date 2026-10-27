@@ -9,7 +9,7 @@ import {
 } from './session.js';
 import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS, UPPER_SLOTS, LOWER_SLOTS } from './analysis.js';
 import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, upperLowerFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
-import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp } from './util.js';
+import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp, median } from './util.js';
 import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAND_DEFAULTS, sandSettings, setSandSettings } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
@@ -40,6 +40,7 @@ const SAND_KEY = 'kinesphere:sand';
 const HELP_KEY = 'kinesphere:dashHelp';
 const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
 const NAME_KEY = 'kinesphere:name';
+const MAX_RECORDED = 12; // people slots in one recording, local and online together
 const CAMERA_TIMEOUT_MS = 15000;
 
 /** Neutral standing pose (MAJOR order, torso units, selfie view) used for the body heat diagram. */
@@ -718,15 +719,29 @@ function onDetection(slots, now) {
 
   if (state.recording) {
     const rec = state.recording;
-    if (present.length && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
+    const remoteNow = rec.remote.map(r => { const rem = state.mp.remotes.get(r.id); return rem?.poses?.[0] && now - rem.at < 500 ? rem : null; });
+    if ((present.length || remoteNow.some(Boolean)) && now - rec.lastStored >= STORE_INTERVAL_MS - 1) {
       const frame = new Float32Array(rec.people * FRAME_SIZE);
       const hands = rec.hands ? new Float32Array(rec.people * HAND_SIZE) : null;
       const world = rec.world ? new Float32Array(rec.people * WORLD_SIZE) : null;
       slots.forEach((pose, p) => {
-        if (!pose || p >= rec.people) return;
+        if (!pose || p >= rec.local) return;
         frame.set(pose.lm, p * FRAME_SIZE);
         if (hands && pose.hands) hands.set(pose.hands, p * HAND_SIZE);
         if (world && pose.world) world.set(pose.world, p * WORLD_SIZE);
+      });
+      // Online dancers as their camera saw them, x rescaled to this picture's aspect ratio so body
+      // shapes and distances stay true; the replay places them beside you for display.
+      const myAspect = (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9);
+      remoteNow.forEach((rem, k) => {
+        if (!rem) return;
+        const o = (rec.local + k) * FRAME_SIZE, src = rem.poses[0], ra = rem.aspect || myAspect;
+        for (let i = 0; i < 33; i++) {
+          frame[o + i * 4] = 0.5 + (src[i * 4] - 0.5) * ra / myAspect;
+          frame[o + i * 4 + 1] = src[i * 4 + 1];
+          frame[o + i * 4 + 3] = src[i * 4 + 3];
+        }
+        if (world && rem.worlds?.[0]) world.set(rem.worlds[0], (rec.local + k) * WORLD_SIZE);
       });
       rec.frames.push({ t: now - rec.startedAt, lm: frame, hands, world });
       rec.lastStored = now;
@@ -737,7 +752,7 @@ function onDetection(slots, now) {
   if (game.isOpen) game.onPoses(slots, now, (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
   else updateGesture(present, now);
   updateFraming(present, now);
-  if (mp.active) mp.sendPoses(present.map(pose => pose.lm), now);
+  if (mp.active) mp.sendPoses(present.map(pose => pose.lm), now, present.map(pose => pose.world ?? null));
   if (present[0]) trackMyBody(present[0].lm);
   updateStatus(present.length);
   if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
@@ -795,7 +810,16 @@ function startRecording(trigger, now = performance.now()) {
   if (state.recording || !state.detector) return;
   state.countdown = null;
   ui.countdown.hidden = true;
-  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, people: state.detector.people, hands: Boolean(state.detector.hands), world: Boolean(state.detector.world) };
+  // Online dancers in view when the recording starts are recorded too, as extra people after the local ones.
+  const local = state.detector.people;
+  const remote = mp.active ? [...state.mp.remotes].filter(([, r]) => r.poses?.length && now - r.at < 1500).slice(0, MAX_RECORDED - local)
+    .map(([id, r]) => ({ id, name: r.name, lane: r.lane })) : [];
+  const slots = remote.length ? [
+    ...Array.from({ length: local }, (_, p) => ({ name: local > 1 ? `${myName()} ${p + 1}` : myName(), remote: false })),
+    ...remote.map(r => ({ name: r.name, remote: true, ...(Number.isFinite(r.lane) ? { lane: r.lane } : {}) })),
+  ] : null;
+  state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, local, remote, slots, people: local + remote.length, hands: Boolean(state.detector.hands), world: Boolean(state.detector.world) || remote.length > 0 };
+  if (remote.length) toast(`Recording you and ${remote.map(r => r.name).join(', ')}`, 3000);
   ui.stage.classList.add('is-recording');
   ui.recBadge.hidden = false;
   ui.recTime.textContent = '0:00';
@@ -845,6 +869,10 @@ function stopRecording(trimBeforeT = null, { navigate = true, discard = false, n
     mirrored: state.mirrored,
   });
   if (name) session.name = `${name} · ${session.name}`;
+  if (rec.slots) {
+    session.slots = rec.slots;
+    if (!name) session.name = `${session.name} · with ${rec.remote.map(r => r.name).join(', ')}`;
+  }
   if (navigate) { openSession(session, { save: true }); return session; }
   store.save(session).then(updateSessionCount, err => {
     if (!(err instanceof StorageFullError)) console.error(err);
@@ -898,10 +926,18 @@ async function importFile(file) {
   }
 }
 
+/** Name of person slot p: their name for online dancers and named slots, else "Person n". */
+function slotLabel(session, p, { online = true } = {}) {
+  const sl = session.slots?.[p] ?? (session.slotNames ? { name: session.slotNames[p] } : null);
+  if (sl?.name) return `${sl.name}${online && sl.remote ? ' (online)' : ''}`;
+  return `Person ${p + 1}`;
+}
+const isRemoteSlot = (session, p) => Boolean(session.slots?.[p]?.remote);
+
 function describeSession(s) {
   const info = ENGINES.find(e => e.id === s.model);
   const modelText = info ? info.label : `${escapeHtml(s.model)} model`;
-  const people = (s.people || 1) > 1 ? ` · ${s.people} people` : '';
+  const people = (s.people || 1) > 1 ? ` · ${s.people} people${s.online ? ` (${s.online} online)` : ''}` : '';
   const hands = s.hands ? ' · with hands' : '';
   return `${modelText}${people}${hands}`;
 }
@@ -929,7 +965,7 @@ function renderDashboard() {
     <div class="person-tabs" role="tablist" aria-label="Person">
       ${people > 1
         ? analyses.map((an, p) => `<button class="tab${p === person && !comparing ? ' is-active' : ''}" role="tab" data-person="${p}" aria-selected="${p === person && !comparing}">
-        <i class="swatch" style="background:${personColors(p).left}"></i>Person ${p + 1}
+        <i class="swatch" style="background:${personColors(p).left}"></i>${escapeHtml(slotLabel(session, p))}
         <small>${an.ok ? `${fmtPct(an.validFraction)} tracked` : 'no data'}</small></button>`).join('')
         : `<button class="tab${comparing ? '' : ' is-active'}" role="tab" data-person="0" aria-selected="${!comparing}">This dancer</button>`}
       <button class="tab tab-compare${comparing ? ' is-active' : ''}" role="tab" data-compare aria-selected="${comparing}" title="Compare two dancers: two people in this session, or someone from another saved session">⇄ Compare two dancers</button>
@@ -952,7 +988,7 @@ function renderDashboard() {
     ${saveError ? `<div class="banner banner-warn"><b>Not saved.</b> ${escapeHtml(saveError)}</div>` : ''}
     <section class="card">
       <h2>Replay</h2>
-      <p class="card-sub">The recorded pose${people > 1 ? 's' : ''}, as you saw ${people > 1 ? 'them' : 'it'} on screen. Scrub to move the cursor on the charts below.</p>
+      <p class="card-sub">The recorded pose${people > 1 ? 's' : ''}, as you saw ${people > 1 ? 'them' : 'it'} on screen. Scrub to move the cursor on the charts below.${session.slots?.some(sl => sl.remote) ? ' Dancers who joined online are shown beside you, scaled to your size, as in the live view; their metrics are measured from their own camera.' : ''}</p>
       <div class="replay"><canvas id="replay-canvas"></canvas></div>
       <div class="replay-controls">
         <button class="btn" id="replay-play" aria-label="Play">▶</button>
@@ -976,7 +1012,7 @@ function renderDashboard() {
     </section>
     ${tabs}
     ${comparing ? '<div id="compare-root"></div>'
-      : a.ok ? dashboardCards(a) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? `person ${person + 1}` : 'this session'}. ${escapeHtml(a.reason)}</div>`}
+      : a.ok ? dashboardCards(a, { remoteName: isRemoteSlot(session, person) ? slotLabel(session, person, { online: false }) : null }) : `<div class="banner">Not enough pose data to analyse ${people > 1 ? escapeHtml(slotLabel(session, person)) : 'this session'}. ${escapeHtml(a.reason)}</div>`}
   `;
   const helpBox = root.querySelector('#show-help');
   helpBox.checked = localStorage.getItem(HELP_KEY) !== 'off';
@@ -1026,9 +1062,9 @@ function renderDashboard() {
 function compareChoices() {
   const { session, analyses } = state.current;
   const many = (session.people || 1) > 1;
-  const own = analyses.map((an, p) => ({ key: `${session.id}:${p}`, label: many ? `Person ${p + 1} (this session)` : `This session${session.name ? ` (${session.name})` : ''}` }));
+  const own = analyses.map((an, p) => ({ key: `${session.id}:${p}`, label: many ? `${slotLabel(session, p)} (this session)` : `This session${session.name ? ` (${session.name})` : ''}` }));
   const others = store.list().filter(m => m.id !== session.id).flatMap(m => Array.from({ length: m.people || 1 }, (_, p) => ({
-    key: `${m.id}:${p}`, label: `${m.name}${(m.people || 1) > 1 ? ` · Person ${p + 1}` : ''}`,
+    key: `${m.id}:${p}`, label: `${m.name}${(m.people || 1) > 1 ? ` · ${slotLabel(m, p)}` : ''}`,
   })));
   return { own, others };
 }
@@ -1247,7 +1283,7 @@ function setupReplay3D(session, analyses, root, replay) {
   replay.destroy = () => { viewer?.destroy(); viewer = null; replay.setDepth = null; replay.setMirror = null; destroyOld(); };
 }
 
-function dashboardCards(a) {
+function dashboardCards(a, { remoteName = null } = {}) {
   const k = a.kinesphere;
   const shapes = a.shapes.map((s, i) => `
       <div class="shape"><div class="shape-rank">#${i + 1}</div><div id="shape-${i}"></div><div class="shape-share">${fmtPct(s.share)}<small class="meta"> of the time</small></div></div>`).join('');
@@ -1322,7 +1358,7 @@ function dashboardCards(a) {
 
     <section class="card">
       <h2>Path on the floor</h2>
-      <p class="card-sub">A bird's eye view of where you moved in the room, estimated from the camera: the camera is at the top, and the shaded wedge is what it could see. Your path runs from start (ring) to end (filled dot); shaded squares show where you spent the most time.</p>
+      <p class="card-sub">A bird's eye view of where you moved in the room, estimated from the camera: the camera is at the top, and the shaded wedge is what it could see. Your path runs from start (ring) to end (filled dot); shaded squares show where you spent the most time.${remoteName ? ` ${escapeHtml(remoteName)} joined online, so this is their own room as their camera saw it.` : ''}</p>
       <div class="two-col">
         <div id="space-plot"></div>
         <div>
@@ -1445,10 +1481,11 @@ const lerpHex = (a, b, t) => {
   return `rgb(${pa.map((v, i) => Math.round(v + (pb[i] - v) * clamp(t, 0, 1))).join(',')})`;
 };
 
-function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
+function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person, tf = null) {
   const F = a.frames;
   if (!F || i < 0 || i >= F.kClass.length || !lm) return;
-  const sc = F.scale[i], floor = F.floor[i];
+  // an online dancer is drawn moved and scaled (see remotePlacement): measure in the same space
+  const sc = F.scale[i] * (tf ? tf.s : 1), floor = tf ? tf.a + F.floor[i] * tf.s : F.floor[i];
   const X = x => (mirror ? 1 - x : x) * w;
   const u = Math.max(1, w / 1280);
   ctx.save();
@@ -1522,7 +1559,7 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
     ['Upper / lower', upper + lower > 0 ? `${fmtPct(upper / (upper + lower))} / ${fmtPct(lower / (upper + lower))}` : '–', '#fff'],
     ['Most active', top >= 0 ? MAJOR_NAMES[top] : 'still', '#fff'],
   ];
-  if (person != null) rows.unshift(['Person', String(person + 1), '#fff']);
+  if (person != null) rows.unshift(['Person', String(person), '#fff']);
   const fs = Math.round(15 * u), lh = fs * 1.45, padX = 12 * u, boxW = 260 * u, boxH = rows.length * lh + 14 * u;
   ctx.fillStyle = 'rgba(0,0,0,0.62)';
   ctx.fillRect(10 * u, 10 * u, boxW, boxH);
@@ -1537,6 +1574,55 @@ function drawMetricsOverlay(ctx, a, i, lm, w, h, mirror, times, person) {
     ctx.fillText(value, 10 * u + padX + 110 * u, y);
   });
   ctx.restore();
+}
+
+/**
+ * Where to draw each online dancer in a replay, as in the live view: in their lane beside the local
+ * dancer, scaled to the local dancer's size and hip height. One fixed transform per dancer
+ * { lane, s, a } (x' = lane + (x - 0.5) * s, y' = a + y * s), from session medians, so the
+ * metrics overlay can follow it. Local slots get null (drawn as recorded).
+ */
+function remotePlacement(session) {
+  const people = session.people || 1;
+  const out = new Array(people).fill(null);
+  if (!session.slots?.some(sl => sl.remote)) return out;
+  const stats = p => {
+    const torso = [], hipY = [], hipX = [];
+    for (let i = 0; i < session.frameCount; i += 3) {
+      const o = frameOffset(session, i, p), L = session.lm;
+      if (![11, 12, 23, 24].every(k => L[o + k * 4 + 3] >= 0.4)) continue;
+      const hx = (L[o + 92] + L[o + 96]) / 2, hy = (L[o + 93] + L[o + 97]) / 2;
+      const sx = (L[o + 44] + L[o + 48]) / 2, sy = (L[o + 45] + L[o + 49]) / 2;
+      torso.push(Math.hypot((sx - hx) * session.width / session.height, sy - hy)); hipY.push(hy); hipX.push(hx);
+    }
+    return { torso: median(torso), hipY: median(hipY), hipX: median(hipX) };
+  };
+  const localP = session.slots.findIndex(sl => !sl.remote);
+  const me = localP >= 0 ? stats(localP) : { torso: NaN, hipY: NaN, hipX: 0.5 };
+  const remotes = session.slots.map((sl, p) => (sl.remote ? p : -1)).filter(p => p >= 0);
+  // lanes: as recorded, or the lanes left free beside the local dancer
+  const total = remotes.length + 1, centres = Array.from({ length: total }, (_, k) => (k + 0.5) / total);
+  const myX = Number.isFinite(me.hipX) ? me.hipX : 0.5;
+  const mine = centres.reduce((b, c, k) => (Math.abs(c - myX) < Math.abs(centres[b] - myX) ? k : b), 0);
+  const free = centres.filter((_, k) => k !== mine);
+  remotes.forEach((p, k) => {
+    const st = stats(p);
+    const s = Number.isFinite(me.torso) && st.torso > 0 ? clamp(me.torso / st.torso, 0.35, 2.5) : 1;
+    const hipTarget = Number.isFinite(me.hipY) ? me.hipY : st.hipY;
+    const lane = Number.isFinite(session.slots[p].lane) ? session.slots[p].lane : free[k] ?? 0.5;
+    out[p] = { lane, s, a: Number.isFinite(st.hipY) ? hipTarget - st.hipY * s : 0 };
+  });
+  return out;
+}
+function placeWith(tf, lm, offset) {
+  const out = new Float32Array(132);
+  for (let i = 0; i < 33; i++) {
+    out[i * 4] = tf.lane + (lm[offset + i * 4] - 0.5) * tf.s;
+    out[i * 4 + 1] = tf.a + lm[offset + i * 4 + 1] * tf.s;
+    out[i * 4 + 2] = lm[offset + i * 4 + 2] * tf.s;
+    out[i * 4 + 3] = lm[offset + i * 4 + 3];
+  }
+  return out;
 }
 
 /** The quiet "body partially out of frame" hint, bottom right of a canvas. */
@@ -1570,6 +1656,7 @@ function setupReplay(session, root, onTime, metrics = null) {
   let viewer = null;
   let mirrorView = session.mirrored; // how the dancer saw the preview; the toggle can flip it
   const poses3d = new Array(people).fill(null);
+  const placement = remotePlacement(session);
   const overlayBox = root.querySelector('#replay-overlay');
   let showMetrics = Boolean(metrics) && localStorage.getItem(OVERLAY_METRICS_KEY) === 'on';
   if (overlayBox) {
@@ -1600,14 +1687,16 @@ function setupReplay(session, root, onTime, metrics = null) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
       if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false }); continue; }
-      const shown = smoother.apply(lm, offset, p, dt);
+      const tf = placement[p];
+      const shown = smoother.apply(tf ? placeWith(tf, lm, offset) : lm, tf ? 0 : offset, p, dt);
       const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
       poses3d[p] = { lm: shown, offset: 0 };
       effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false, hands });
-      if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
+      if (session.slots?.[p]?.name) drawNameTag(shown, w, h, slotLabel(session, p, { online: false }), personColors(p).left, { ctx, mirror: mirrorView, flipText: false });
+      else if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
     }
     if (showMetrics && hasFrame && poses3d[metrics.person]) {
-      drawMetricsOverlay(ctx, metrics.analysis, i, poses3d[metrics.person].lm, w, h, mirrorView, times, people > 1 ? metrics.person : null);
+      drawMetricsOverlay(ctx, metrics.analysis, i, poses3d[metrics.person].lm, w, h, mirrorView, times, people > 1 ? slotLabel(session, metrics.person, { online: false }) : null, placement[metrics.person]);
     }
     if (hasFrame && Array.from({ length: people }, (_, p) => frameOffset(session, i, p)).some(o => personPresent(lm, o) && !bodyInFrame(lm, o, minVis))) {
       drawFramingHint(ctx, w, h);
@@ -1766,7 +1855,7 @@ function onMpPeers(peers) {
   renderMpPanel();
 }
 
-function onMpPose(id, poses, aspect) {
+function onMpPose(id, poses, aspect, worlds = []) {
   const remotes = state.mp.remotes;
   if (!poses) { remotes.delete(id); return; }
   let rem = remotes.get(id);
@@ -1775,6 +1864,7 @@ function onMpPose(id, poses, aspect) {
     remotes.set(id, rem);
   }
   rem.poses = poses;
+  rem.worlds = worlds;
   rem.aspect = aspect;
   rem.at = performance.now();
 }
@@ -1857,27 +1947,27 @@ function drawRemoteDancers(width, height, dt, minVis) {
   });
 }
 
-function drawNameTag(lm, w, h, name, colour) {
-  const x = lm[0] * w, y = Math.min(lm[1], lm[45], lm[49]) * h - h * 0.07;
+function drawNameTag(lm, w, h, name, colour, { ctx = overlayCtx, mirror = false, flipText = state.mirrored || game.isPlaying } = {}) {
+  const x = (mirror ? 1 - lm[0] : lm[0]) * w, y = Math.min(lm[1], lm[45], lm[49]) * h - h * 0.07;
   const fs = Math.max(12, Math.round(h / 34));
-  overlayCtx.save();
-  overlayCtx.translate(x, Math.max(fs, y));
-  if (state.mirrored || game.isPlaying) overlayCtx.scale(-1, 1); // the canvas is shown mirrored: keep text readable
-  overlayCtx.font = `600 ${fs}px system-ui, sans-serif`;
-  const tw = overlayCtx.measureText(name).width;
-  overlayCtx.fillStyle = 'rgba(0,0,0,0.6)';
-  overlayCtx.beginPath();
-  overlayCtx.roundRect?.(-tw / 2 - fs * 0.6, -fs * 0.85, tw + fs * 1.2, fs * 1.5, fs * 0.75);
-  overlayCtx.fill();
-  overlayCtx.fillStyle = '#fff';
-  overlayCtx.textAlign = 'center';
-  overlayCtx.textBaseline = 'middle';
-  overlayCtx.fillText(name, 0, -fs * 0.1);
-  overlayCtx.fillStyle = colour;
-  overlayCtx.beginPath();
-  overlayCtx.arc(-tw / 2 - fs * 0.25, -fs * 0.1, fs * 0.22, 0, Math.PI * 2);
-  overlayCtx.fill();
-  overlayCtx.restore();
+  ctx.save();
+  ctx.translate(x, Math.max(fs, y));
+  if (flipText) ctx.scale(-1, 1); // the live canvas is shown mirrored by CSS: keep text readable
+  ctx.font = `600 ${fs}px system-ui, sans-serif`;
+  const tw = ctx.measureText(name).width;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.beginPath();
+  ctx.roundRect?.(-tw / 2 - fs * 0.6, -fs * 0.85, tw + fs * 1.2, fs * 1.5, fs * 0.75);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(name, 0, -fs * 0.1);
+  ctx.fillStyle = colour;
+  ctx.beginPath();
+  ctx.arc(-tw / 2 - fs * 0.25, -fs * 0.1, fs * 0.22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 async function hostRoom() {
@@ -1940,7 +2030,7 @@ function renderMpPanel() {
       <p>Create a link and send it to someone. When they open it and start their camera, you see their avatar next to yours, and they see yours, in whatever style each of you picks. Up to ${MAX_GUESTS + 1} dancers.</p>
       ${nameRow}
       <div class="mp-row"><button class="btn btn-sm btn-primary" data-mp="host">Create invite link</button></div>
-      <p class="fine">Only pose landmarks are sent (about 8 KB/s per dancer), never video, directly between browsers over an encrypted WebRTC connection. A free PeerJS server introduces the browsers (it sees the room code and your IP address), and PeerJS's relay servers carry the encrypted data when a direct connection is impossible. The people you dance with can see your IP address, as with any video call. Anyone with the link can join until you end the session.</p>`;
+      <p class="fine">Only pose landmarks are sent (about 10 KB/s per dancer), never video, directly between browsers over an encrypted WebRTC connection. A free PeerJS server introduces the browsers (it sees the room code and your IP address), and PeerJS's relay servers carry the encrypted data when a direct connection is impossible. The people you dance with can see your IP address, as with any video call. Anyone with the link can join until you end the session.</p>`;
   }
   el.innerHTML = body;
   el.querySelector('#mp-name')?.addEventListener('change', e => { setMyName(e.target.value); renderMpPanel(); });

@@ -208,6 +208,7 @@ export function serialize(session) {
     people,
     trigger: session.trigger,
     frameCount: n,
+    ...(session.slots ? { slots: session.slots } : {}),
     landmarkNames: LANDMARK_NAMES,
     handLandmarks: hands ? HAND_LANDMARKS : 0,
     worldJoints: session.world ? WORLD_JOINTS : [],
@@ -217,6 +218,7 @@ export function serialize(session) {
       visibility: 'base64 of uint8, one per landmark in the same order; divide by 255. A person with visibility 0 everywhere was not detected in that frame',
       movenet: 'when engine is "movenet" only the 17 COCO joints are filled (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles); z is always 0',
       hands: 'when present (MediaPipe Holistic), handPositions/handVisibility hold 42 landmarks per person per frame: the left hand (21 points, MediaPipe hand order) then the right hand, packed like positions/visibility; a hand with visibility 0 was not detected',
+      slots: 'when present, one entry per person slot: { name, remote } where remote marks a dancer who joined online (their poses are in their own camera\'s frame, with x rescaled to this recording\'s aspect ratio), plus the lane they were shown in',
       world: 'when present (MediaPipe), worldPositions holds metric 3D positions in metres (origin at the hip midpoint) for the landmarks listed in worldJoints, as little-endian int16 triples [x, y, z] ordered frame -> person -> joint; divide by 10000. Visibility is the same as the matching landmark in positions; all zeros means not detected',
     },
     times: Array.from(session.times, t => Math.round(t)),
@@ -252,6 +254,7 @@ export function deserialize(text) {
     people,
     trigger: j.trigger || 'unknown',
     frameCount: n,
+    slots: Array.isArray(j.slots) ? j.slots.slice(0, people).map(sl => ({ name: String(sl?.name ?? '').slice(0, 24), remote: Boolean(sl?.remote), ...(Number.isFinite(sl?.lane) ? { lane: sl.lane } : {}) })) : null,
     times: Float64Array.from(j.times),
     lm, hands, world,
   };
@@ -305,7 +308,8 @@ function metaOf(session, bytes) {
   return {
     id: session.id, name: session.name, createdAt: session.createdAt,
     durationMs: session.durationMs, frameCount: session.frameCount, bytes,
-    people: session.people || 1, engine: session.engine || 'mediapipe', model: session.model, hands: Boolean(session.hands), world: Boolean(session.world),
+    people: session.people || 1, online: session.slots ? session.slots.filter(sl => sl.remote).length : 0,
+    slotNames: session.slots ? session.slots.map(sl => sl.name) : null, engine: session.engine || 'mediapipe', model: session.model, hands: Boolean(session.hands), world: Boolean(session.world),
   };
 }
 

@@ -143,12 +143,23 @@ everyone is told. Voice commands: “invite” and “leave session”.
   guests, so the session lasts as long as the host stays. To use your own PeerJS server, add
   `?signal=wss://your.server[:port]/path` to the page address; invite links keep it.
 * **What is sent.** Only pose landmarks (x, y and visibility of the 33 points for each tracked
-  person), up to 20 times a second: about 8 KB/s per dancer. Never video or audio. WebRTC data is
+  person, plus the 13 major joints in 3D when the model gives them), up to 20 times a second:
+  about 10 KB/s per dancer. Never video or audio. WebRTC data is
   always encrypted end to end. As in any video call, participants' browsers learn each other's IP
   addresses, and the signalling server sees the room code and IP addresses. Anyone with the link
   can join while the session is open; room codes are 10 random characters.
-* Recording, the dashboard and the game still work during a session (the others keep seeing you
-  while you look at the dashboard). Recordings contain only your own dancing.
+* **Recording together.** Press Record during a session and the online dancers in view are recorded
+  too, as extra people after you (up to 12 people in one recording), with their names. The
+  dashboard then has a tab per dancer (“Ben (online)”), the replay shows them beside you scaled
+  to your size as in the live view (the metrics overlay follows whoever is selected), and
+  *Compare two dancers* can put you side by side with any of them. Their metrics come from their
+  own camera's view: their poses are stored as their camera saw them (x rescaled to your
+  recording's aspect ratio), with their 3D world landmarks when their model provides them, so
+  kinesphere, body activity, level and speed are measured just as for you, and their floor path
+  is their own room. Someone who joins after the recording started is not added to it. The
+  session file lists every slot's name and whether they were online (`slots`).
+* The dashboard and the game still work during a session; the others keep seeing you while you
+  look at the dashboard.
 
 ### Voice control (hands-free)
 
