@@ -32,7 +32,7 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
    sparks that fly off fast-moving joints, a constellation, **Sandman**, **Fuzzy blur**,
-   **Origami**, **Pencil sketch** or **Hoops**. *Origami* folds the body from paper: each limb is a kite
+   **Origami**, **Origami pleats**, **Pencil sketch**, **Animator sketch** or **Hoops**. *Origami* folds the body from paper: each limb is a kite
    creased along the bone, with its two facets shaded by a light from the upper left, a
    four-facet torso and a faceted head, casting a soft shadow. *Pencil sketch* draws a loose
    graphite figure (doubled limb contours, sketched joints, a hatched torso) whose lines redraw
@@ -42,7 +42,17 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    torso, one round the neck and a halo above the head, each with a dim far half and a bright near
    half. A striped hula hoop circles the waist: it spins faster the more the hips move, wobbles
    round the waist as it spins, tilts with the hip line, and hangs on a springy link so it swings
-   behind quick hip movements.
+   behind quick hip movements. *Animator sketch* is a loose construction drawing in the manner of
+   hand-drawn character animation: each limb is a pair of contour lines that swell over the
+   muscle, the torso carries a centre line, a chest line and a waist ellipse, shoulders get ovals,
+   hands are mittens with a thumb and the head is a boxy sketch with an ear and a stroke of hair,
+   all redrawn slightly every eighth of a second, with a soft shadow cast to one side. Dancers
+   alternate between graphite and white chalk, and with the camera feed hidden they are drawn on
+   warm toned paper. *Origami pleats* folds each dancer from cream paper shaded with amber in the
+   folds: a pyramid-shaped head over a pointed face, a torso of fan pleats spreading from the
+   neck to sharp shoulder flaps and the waist, long sleeves that taper to a point, wide creased
+   trousers flaring at the hem, and folded waist flaps that hang on a spring and swing behind the
+   movement. With the camera feed hidden it is shown in a soft studio with a wooden floor.
    *Sandman* draws a body made of sand that sheds grains as you move: a trickle when still, a
    stream from fast limbs and a burst when a limb speeds up or stops sharply. Grains leave with
    the momentum of the body part that shed them (its velocity, nudged along its acceleration),
@@ -172,7 +182,7 @@ whether you were understood. Examples:
 | Say | Does |
 | --- | --- |
 | “Start recording” / “Record”, “Stop”, “Cancel” | start after the 3-second countdown, stop (the dashboard opens), cancel the countdown |
-| “Neon”, “Sandman”, “Pencil”, “Origami”, “Fuzzy blur”, “Hoops”, “Next style” | overlay style |
+| “Neon”, “Sandman”, “Pencil”, “Animator”, “Origami”, “Pleats”, “Fuzzy blur”, “Hoops”, “Next style” | overlay style |
 | “Overlay off”, “Hide video”, “Mirror off”, “Flip”, “3D view”, “Fullscreen”, “Smoothing strong” | display options |
 | “Blue sand”, “Gravity up / off / 2”, “Float”, “Longer trails”, “Decay 5 seconds”, “More momentum”, “Reset sand” | Sandman particles (switches to Sandman) |
 | “Two people”, “Just me”, “Use MultiPose / Lite / Heavy / Holistic” | tracking settings |

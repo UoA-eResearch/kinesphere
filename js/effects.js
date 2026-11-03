@@ -29,6 +29,8 @@ export const STYLES = [
   { id: 'origami', label: 'Origami (paper)' },
   { id: 'pencil', label: 'Pencil sketch' },
   { id: 'hoops', label: 'Hoops (hula hoop)' },
+  { id: 'animator', label: 'Animator sketch' },
+  { id: 'pleats', label: 'Origami pleats' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -990,7 +992,331 @@ function fuzzyStyle() {
   };
 }
 
-const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle, hoops: hoopsStyle };
+// ---- animator sketch: a loose construction drawing on toned paper, graphite or white chalk ----
+
+const tonedCache = new Map();
+/** A warm, toned drawing paper: lighter at the top, a fine grain, darker towards the floor. */
+function tonedSheet(w, h) {
+  const key = `${w}x${h}`;
+  let c = tonedCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#b9a48d'); grad.addColorStop(0.7, '#b4a089'); grad.addColorStop(1, '#c6b39b');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, h);
+  const rnd = seeded(11);
+  for (let i = 0; i < (w * h) / 40; i++) { // fibres: short, mostly horizontal flecks
+    g.fillStyle = `rgba(${rnd() < 0.5 ? '90,72,52' : '235,225,210'},${(rnd() * 0.08).toFixed(3)})`;
+    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 3, 1);
+  }
+  tonedCache.clear();
+  tonedCache.set(key, c);
+  return c;
+}
+
+function animatorStyle() {
+  const BOIL = 0.12; // s between redraws, like drawn-on-twos animation
+  let clock = 0;
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
+      clock += dt;
+      if (!videoVisible && person === 0) ctx.drawImage(tonedSheet(w, h), 0, 0);
+      if (!lm) return;
+      const p = project(lm, offset, w, h, mirror);
+      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      const T = torsoPx(p);
+      const chalk = person % 2 === 1; // dancers alternate graphite and white chalk
+      const ink = chalk ? '248,244,236' : '40,33,28', under = chalk ? '30,24,20' : '255,255,255';
+      const rnd = seeded(Math.floor(clock / BOIL) * 131 + person * 17 + 3);
+      const jit = a => (rnd() - 0.5) * 2 * a;
+      const lw = Math.max(1, T / 85);
+      const ok = (...ids) => ids.every(i => p.v[i] >= minVis);
+      const P = i => [p.x[i], p.y[i]];
+      const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];
+      const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
+      const perp = u => [-u[1], u[0]];
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      // one hand-drawn line through points (smoothed), wobbling a little on every redraw
+      const line = (pts, { alpha = 0.85, width = lw, wob = T * 0.012, close = false } = {}) => {
+        const q = pts.map(([x, y]) => [x + jit(wob), y + jit(wob)]);
+        if (close) q.push(q[0]);
+        const path = () => {
+          ctx.beginPath();
+          ctx.moveTo(q[0][0], q[0][1]);
+          for (let i = 1; i < q.length - 1; i++) ctx.quadraticCurveTo(q[i][0], q[i][1], (q[i][0] + q[i + 1][0]) / 2, (q[i][1] + q[i + 1][1]) / 2);
+          ctx.lineTo(q[q.length - 1][0], q[q.length - 1][1]);
+        };
+        if (videoVisible) { ctx.strokeStyle = `rgba(${under},0.22)`; ctx.lineWidth = width * 2.4; path(); ctx.stroke(); }
+        ctx.strokeStyle = `rgba(${ink},${(alpha * (0.8 + 0.2 * rnd())).toFixed(3)})`;
+        ctx.lineWidth = width * (0.75 + 0.5 * rnd());
+        path(); ctx.stroke();
+      };
+      // a limb segment as two contour lines that swell (muscle) a third of the way down
+      const limb = (a, b, wa, wb, bulge, at = 0.35) => {
+        if (!ok(a, b)) return;
+        const A = P(a), B = P(b), u = unit(A, B), n = perp(u), M = mix(A, B, at);
+        for (const sgn of [1, -1]) {
+          line([add(add(A, u, -T * 0.02), n, sgn * wa * T), add(M, n, sgn * bulge * T * (sgn > 0 ? 1 : 0.85)), add(add(B, u, T * 0.02), n, sgn * wb * T)]);
+        }
+      };
+      const shL = P(11), shR = P(12), hpL = P(23), hpR = P(24);
+      const shM = mix(shL, shR, 0.5), hpM = mix(hpL, hpR, 0.5);
+      const axis = unit(shM, hpM), side = perp(axis);
+      const outOf = pt => { const d = (pt[0] - shM[0]) * side[0] + (pt[1] - shM[1]) * side[1]; return [side[0] * Math.sign(d || 1), side[1] * Math.sign(d || 1)]; };
+      // soft cast shadow on the floor, falling to one side as under a low light
+      const feet = [27, 28].filter(i => p.v[i] >= minVis).map(P);
+      if (feet.length) {
+        const fy = Math.max(...feet.map(f => f[1])) + T * 0.05, fx = feet.reduce((a, f) => a + f[0], 0) / feet.length;
+        ctx.save();
+        ctx.filter = `blur(${Math.max(2, T * 0.05).toFixed(1)}px)`;
+        ctx.fillStyle = 'rgba(60,45,32,0.28)';
+        ctx.beginPath();
+        ctx.ellipse(fx + T * 0.55, fy, T * 0.75, T * 0.07, -0.04, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      // legs: trouser contours, the crotch, simple shoes and a ground ellipse under each foot
+      limb(23, 25, 0.19, 0.13, 0.17); limb(25, 27, 0.13, 0.1, 0.12, 0.3);
+      limb(24, 26, 0.19, 0.13, 0.17); limb(26, 28, 0.13, 0.1, 0.12, 0.3);
+      const crotch = add(hpM, axis, T * 0.16);
+      line([add(hpL, outOf(hpL), -T * 0.02), crotch, add(hpR, outOf(hpR), -T * 0.02)], { alpha: 0.7 });
+      for (const [k, a] of [[27, 25], [28, 26]]) {
+        if (!ok(k)) continue;
+        const F = P(k), toe = add(F, outOf(F), T * 0.2);
+        line([add(F, [0, -1], T * 0.04), add(toe, [0, -1], T * 0.02), add(toe, [0, 1], T * 0.04), add(F, [0, 1], T * 0.06)], { alpha: 0.8 });
+        line([add(F, [0, 1], T * 0.07), add(add(F, outOf(F), T * 0.12), [0, 1], T * 0.09)], { alpha: 0.4, width: lw * 0.8 });
+        void a;
+      }
+      // torso: outer contours, shoulder line, centre line, chest line and the waist ellipse
+      for (const [sh, hp] of [[shL, hpL], [shR, hpR]]) {
+        const o = outOf(sh);
+        line([add(sh, o, T * 0.05), add(mix(sh, hp, 0.3), o, T * 0.03), add(mix(sh, hp, 0.62), o, -T * 0.04), add(hp, o, T * 0.07)]);
+      }
+      line([add(shL, outOf(shL), T * 0.04), add(shM, axis, -T * 0.06), add(shR, outOf(shR), T * 0.04)]);
+      line([add(shM, axis, -T * 0.04), mix(shM, hpM, 0.5), add(hpM, axis, T * 0.05)], { alpha: 0.5, width: lw * 0.8 });
+      const chest = t => [add(mix(shL, hpL, t), outOf(shL), T * 0.02), add(mix(shM, hpM, t), axis, T * 0.02), add(mix(shR, hpR, t), outOf(shR), T * 0.02)];
+      line(chest(0.36), { alpha: 0.55, width: lw * 0.85 });
+      const wc = mix(shM, hpM, 0.86), wr = Math.hypot(hpR[0] - hpL[0], hpR[1] - hpL[1]) * 0.75, rot = Math.atan2(side[1], side[0]);
+      ctx.save(); // waist ellipse: just its near half, sketched twice
+      for (let k = 0; k < 2; k++) {
+        ctx.strokeStyle = `rgba(${ink},${(0.6 + 0.2 * rnd()).toFixed(3)})`;
+        ctx.lineWidth = lw * (0.7 + 0.4 * rnd());
+        ctx.beginPath();
+        ctx.ellipse(wc[0] + jit(T * 0.01), wc[1] + jit(T * 0.01), wr * (1 + jit(0.04)), T * (0.07 + jit(0.01)), rot, 0.05 + jit(0.1), Math.PI - 0.05 + jit(0.1));
+        ctx.stroke();
+      }
+      ctx.restore();
+      // arms with shoulder ovals, mitten hands with a thumb
+      limb(11, 13, 0.12, 0.085, 0.12); limb(13, 15, 0.085, 0.055, 0.095, 0.3);
+      limb(12, 14, 0.12, 0.085, 0.12); limb(14, 16, 0.085, 0.055, 0.095, 0.3);
+      for (const [s, e] of [[11, 13], [12, 14]]) {
+        if (!ok(s, e)) continue;
+        const S = P(s), u = unit(S, P(e)), c = add(S, u, T * 0.1);
+        ctx.strokeStyle = `rgba(${ink},0.7)`; ctx.lineWidth = lw * 0.9;
+        ctx.beginPath(); ctx.ellipse(c[0] + jit(T * 0.01), c[1] + jit(T * 0.01), T * 0.13, T * 0.085, Math.atan2(u[1], u[0]), 0, Math.PI * 2); ctx.stroke();
+      }
+      for (const [e, wri] of [[13, 15], [14, 16]]) {
+        if (!ok(e, wri)) continue;
+        const W = P(wri), u = unit(P(e), W), n = perp(u), tip = add(W, u, T * 0.2);
+        line([add(W, n, T * 0.06), add(tip, n, T * 0.04), add(tip, u, T * 0.03), add(tip, n, -T * 0.035), add(W, n, -T * 0.055)], { alpha: 0.8 });
+        line([add(W, n, T * 0.055), add(add(W, u, T * 0.08), n, T * 0.11)], { alpha: 0.7, width: lw * 0.8 }); // thumb
+      }
+      // head: a boxy, slightly tilted head with a jaw, an ear and a stroke of hair; the neck
+      const head = neckAndHead(p, minVis);
+      if (head) {
+        const up = unit([head.nx, head.ny], [head.hx, head.hy]), sd = perp(up), C = [head.hx, head.hy];
+        const hw = head.r * 0.8, hh = head.r * 1.1;
+        const tl = add(add(C, up, hh), sd, -hw), tr = add(add(C, up, hh), sd, hw);
+        const jr = add(add(C, up, -hh * 0.45), sd, hw * 0.95), jl = add(add(C, up, -hh * 0.45), sd, -hw * 0.9);
+        const chin = add(add(C, up, -hh * 0.95), sd, hw * 0.1);
+        line([tl, tr, jr, chin, jl, tl], { alpha: 0.85 });
+        line([add(tl, sd, hw * 0.1), add(add(C, up, hh * 1.15), sd, hw * 0.2), add(add(tr, up, -hh * 0.35), sd, hw * 0.1)], { alpha: 0.6, width: lw * 0.8 }); // hair
+        const ear = add(add(C, up, hh * 0.05), sd, hw * 0.9);
+        ctx.strokeStyle = `rgba(${ink},0.6)`; ctx.lineWidth = lw * 0.8;
+        ctx.beginPath(); ctx.ellipse(ear[0], ear[1], head.r * 0.14, head.r * 0.22, Math.atan2(up[1], up[0]), 0, Math.PI * 2); ctx.stroke();
+        const base = add(shM, axis, -T * 0.05);
+        line([add(jl, sd, hw * 0.35), add(base, sd, -T * 0.08)], { alpha: 0.75 });
+        line([add(jr, sd, -hw * 0.3), add(base, sd, T * 0.08)], { alpha: 0.75 });
+      }
+      ctx.restore();
+      drawExtras(ctx, w, h, opts, 'ghost');
+    },
+    reset() { clock = 0; },
+  };
+}
+
+// ---- origami pleats: a dancer folded from cream paper - pyramid head, fan-pleated torso, pointed
+// sleeves, creased trousers, and waist flaps that trail behind the movement ----
+
+function origamiPleatsStyle() {
+  const LIGHT = [-0.6, -0.8]; // from the upper left
+  let flap = [0, 0], flapV = [0, 0], lastHip = null;
+  const PAPERS = ['#f3e9d4', '#f4e2bc', '#efe5dd', '#eee8cf', '#f6dfc4', '#e9e6d8'];
+  const AMBER = [214, 158, 76];
+  const tint = (hex, f) => { // f: 1 = facing the light (paper), 0 = in shadow (amber)
+    const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    const k = clamp01(f);
+    return `rgb(${c.map((v, i) => Math.round(AMBER[i] * 0.8 + (v - AMBER[i] * 0.8) * k)).join(',')})`;
+  };
+  return {
+    draw(ctx, lm, offset, w, h, dt, opts = {}) {
+      const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
+      if (!videoVisible && person === 0) ctx.drawImage(studioBackdrop(w, h), 0, 0);
+      if (!lm) { lastHip = null; return; }
+      const p = project(lm, offset, w, h, mirror);
+      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      const paper = PAPERS[person % PAPERS.length];
+      const T = torsoPx(p);
+      const ok = (...ids) => ids.every(i => p.v[i] >= minVis);
+      const P = i => [p.x[i], p.y[i]];
+      const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];
+      const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
+      const perp = u => [-u[1], u[0]];
+      const facing = n => 0.55 + 0.45 * (n[0] * LIGHT[0] + n[1] * LIGHT[1]); // a facet's "normal" in the picture plane
+      const polys = [], creases = [];
+      const facet = (pts, f) => polys.push({ pts, f });
+      const crease = (a, b, alpha = 0.35) => creases.push({ a, b, alpha });
+      const shL = P(11), shR = P(12), hpL = P(23), hpR = P(24);
+      const shM = mix(shL, shR, 0.5), hpM = mix(hpL, hpR, 0.5);
+      const axis = unit(shM, hpM), side = perp(axis);
+      const outOf = pt => { const d = (pt[0] - shM[0]) * side[0] + (pt[1] - shM[1]) * side[1]; return [side[0] * Math.sign(d || 1), side[1] * Math.sign(d || 1)]; };
+      // waist flaps hang on a damped spring, so they swing behind quick hip movement
+      if (lastHip && dt > 0) { flap[0] -= (hpM[0] - lastHip[0]) / T; flap[1] -= (hpM[1] - lastHip[1]) / T; }
+      lastHip = hpM;
+      const k = (2 * Math.PI * 1.2) ** 2, damp = 2 * 0.3 * Math.sqrt(k), st = Math.min(dt, 0.05);
+      for (let i = 0; i < 2; i++) { flapV[i] += (-k * flap[i] - damp * flapV[i]) * st; flap[i] = Math.max(-0.8, Math.min(0.8, flap[i] + flapV[i] * st)); }
+      // trousers: one long creased panel per leg, folded along hip-knee-ankle, flaring at the hem
+      for (const [hp, kn, an] of [[23, 25, 27], [24, 26, 28]]) {
+        if (!ok(hp, kn)) continue;
+        const H = P(hp), K = P(kn), A = ok(an) ? P(an) : add(K, unit(H, K), T * 0.8);
+        const o = outOf(H), uk = unit(H, K), ua = unit(K, A), nk = perp(uk), na = perp(ua);
+        const sg = (nk[0] * o[0] + nk[1] * o[1]) > 0 ? 1 : -1;
+        const ho = add(H, nk, sg * T * 0.27), hi = add(H, nk, -sg * T * 0.12);
+        const ko = add(K, nk, sg * T * 0.2), ki = add(K, nk, -sg * T * 0.16);
+        const ao = add(A, na, sg * T * 0.27), ai = add(A, na, -sg * T * 0.24); // flared hem
+        facet([ho, H, K, ko], facing(o)); facet([H, hi, ki, K], facing([-o[0], -o[1]]) * 0.9);
+        facet([ko, K, A, ao], facing(o) * 0.95); facet([K, ki, ai, A], facing([-o[0], -o[1]]) * 0.85);
+        crease(mix(ho, H, 0.5), mix(ao, A, 0.5), 0.25); crease(mix(hi, H, 0.4), mix(ai, A, 0.4), 0.2);
+        crease(H, K); crease(K, A);
+        const toe = add(A, o, T * 0.22); // pointed slipper
+        facet([add(A, na, sg * T * 0.08), toe, add(A, ua, T * 0.08)], 0.7);
+      }
+      // waist flaps
+      for (const hp of [hpL, hpR]) {
+        const o = outOf(hp), base1 = add(add(hp, axis, -T * 0.12), o, -T * 0.08), base2 = add(add(hp, axis, -T * 0.02), o, T * 0.3);
+        const tip = add(add(add(hp, o, T * 0.5), axis, T * 0.5), [flap[0], flap[1]], T * 0.7);
+        const mid = mix(mix(base1, base2, 0.5), tip, 0.45);
+        facet([base1, tip, mid], facing(o) * 0.95); facet([mid, tip, base2], facing(o) * 0.7); // folded once down the middle
+        crease(mid, tip, 0.35);
+      }
+      // torso: a fan of accordion pleats spreading from the neck to the shoulders and waist
+      const neck = add(shM, axis, T * 0.05);
+      const flL = add(add(shL, outOf(shL), T * 0.3), axis, -T * 0.12), flR = add(add(shR, outOf(shR), T * 0.3), axis, -T * 0.12);
+      const wL = add(mix(shL, hpL, 0.9), outOf(shL), T * 0.04), wR = add(mix(shR, hpR, 0.9), outOf(shR), T * 0.04);
+      const edge = [flL, mix(flL, wL, 0.5), wL, mix(wL, wR, 0.25), mix(wL, wR, 0.5), mix(wL, wR, 0.75), wR, mix(wR, flR, 0.5), flR];
+      const pts = [];
+      for (let i = 0; i < edge.length - 1; i++) for (let j = 0; j < 2; j++) pts.push(mix(edge[i], edge[i + 1], j / 2));
+      pts.push(edge[edge.length - 1]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const mid = mix(pts[i], pts[i + 1], 0.5), dir = unit(neck, mid);
+        facet([neck, pts[i], pts[i + 1]], (i % 2 ? 0.55 : 0.95) * facing(perp(dir)) + 0.1);
+      }
+      // sleeves: long tapering prisms, lit on top and shaded beneath, ending in a fine point
+      for (const [s, e, wr] of [[11, 13, 15], [12, 14, 16]]) {
+        if (!ok(s, e)) continue;
+        const S = P(s), E = P(e), Wp = ok(wr) ? P(wr) : add(E, unit(S, E), T * 0.55);
+        const u1 = unit(S, E), n1 = perp(u1), u2 = unit(E, Wp), n2 = perp(u2);
+        const up1 = (n1[1] < 0 ? 1 : -1), up2 = (n2[1] < 0 ? 1 : -1);
+        facet([add(S, n1, up1 * T * 0.13), add(E, n1, up1 * T * 0.08), E, S], facing([n1[0] * up1, n1[1] * up1]));
+        facet([S, E, add(E, n1, -up1 * T * 0.07), add(S, n1, -up1 * T * 0.1)], facing([-n1[0] * up1, -n1[1] * up1]) * 0.8);
+        facet([add(E, n2, up2 * T * 0.08), add(Wp, n2, up2 * T * 0.04), Wp, E], facing([n2[0] * up2, n2[1] * up2]));
+        facet([E, Wp, add(Wp, n2, -up2 * T * 0.035), add(E, n2, -up2 * T * 0.065)], facing([-n2[0] * up2, -n2[1] * up2]) * 0.8);
+        const tip = add(Wp, u2, T * 0.26);
+        facet([add(Wp, n2, T * 0.035), tip, add(Wp, n2, -T * 0.035)], 0.75);
+        crease(S, E); crease(E, Wp);
+      }
+      // head: a four-sided pyramid cap over a narrow, pointed face
+      const head = neckAndHead(p, minVis);
+      if (head) {
+        const up = unit([head.nx, head.ny], [head.hx, head.hy]), sd = perp(up), C = add([head.hx, head.hy], up, head.r * 0.1);
+        const r = head.r * 1.4;
+        const apex = add(C, up, r * 1.05), L = add(add(C, sd, -r * 1.05), up, -r * 0.05), R = add(add(C, sd, r * 1.05), up, -r * 0.05), F = add(add(C, up, -r * 0.3), sd, r * 0.15);
+        const chin = add(C, up, -r * 1.0);
+        facet([add(L, sd, r * 0.45), add(R, sd, -r * 0.45), chin], 0.45); // face beneath the cap
+        facet([apex, L, F], facing([-0.8, -0.6]));
+        facet([apex, F, R], facing([0.8, -0.3]) * 0.75);
+        crease(apex, F, 0.4);
+        facet([add(chin, sd, -r * 0.12), add(neck, sd, -T * 0.06), add(neck, sd, T * 0.06), add(chin, sd, r * 0.12)], 0.55); // neck
+      }
+      const path = q => { ctx.beginPath(); ctx.moveTo(q[0][0], q[0][1]); for (let i = 1; i < q.length; i++) ctx.lineTo(q[i][0], q[i][1]); ctx.closePath(); };
+      ctx.save();
+      ctx.lineJoin = 'round';
+      // soft shadow behind the figure
+      ctx.save();
+      ctx.filter = `blur(${Math.max(2, T * 0.06).toFixed(1)}px)`;
+      ctx.fillStyle = 'rgba(40,25,10,0.22)';
+      const off = T * 0.07;
+      for (const q of polys) { path(q.pts.map(([x, y]) => [x + off, y + off * 0.6])); ctx.fill(); }
+      ctx.restore();
+      // facets: paper colour by how much each faces the light, with a gentle gradient across it
+      ctx.lineWidth = Math.max(0.6, T / 160);
+      for (const q of polys) {
+        path(q.pts);
+        const a = q.pts[0], b = q.pts[Math.floor(q.pts.length / 2)];
+        const g = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+        g.addColorStop(0, tint(paper, q.f + 0.08)); g.addColorStop(1, tint(paper, q.f - 0.12));
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(150,105,50,0.35)';
+        ctx.stroke();
+      }
+      for (const c of creases) {
+        ctx.strokeStyle = `rgba(150,100,45,${c.alpha})`;
+        ctx.beginPath(); ctx.moveTo(c.a[0], c.a[1]); ctx.lineTo(c.b[0], c.b[1]); ctx.stroke();
+      }
+      ctx.restore();
+      drawExtras(ctx, w, h, opts, 'ghost');
+    },
+    reset() { flap = [0, 0]; flapV = [0, 0]; lastHip = null; },
+  };
+}
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+const studioCache = new Map();
+/** A soft, warm studio: a muted rose-to-sage wall over a light wooden floor, so cream paper stands out. */
+function studioBackdrop(w, h) {
+  const key = `${w}x${h}`;
+  let c = studioCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  const floor = h * 0.8;
+  const wall = g.createLinearGradient(0, 0, w, 0);
+  wall.addColorStop(0, '#8d5f63'); wall.addColorStop(0.45, '#8a6a66'); wall.addColorStop(1, '#787a68');
+  g.fillStyle = wall; g.fillRect(0, 0, w, floor);
+  const shade = g.createLinearGradient(0, 0, 0, floor);
+  shade.addColorStop(0, 'rgba(0,0,0,0.25)'); shade.addColorStop(1, 'rgba(255,240,220,0.08)');
+  g.fillStyle = shade; g.fillRect(0, 0, w, floor);
+  g.fillStyle = 'rgba(60,40,35,0.35)'; g.fillRect(0, floor - h * 0.02, w, h * 0.02); // skirting
+  const wood = g.createLinearGradient(0, floor, 0, h);
+  wood.addColorStop(0, '#b88f6c'); wood.addColorStop(1, '#d7b693');
+  g.fillStyle = wood; g.fillRect(0, floor, w, h - floor);
+  g.strokeStyle = 'rgba(90,60,35,0.12)'; g.lineWidth = 1;
+  for (let x = -h; x < w + h; x += h * 0.09) { g.beginPath(); g.moveTo(x, h); g.lineTo(x + (w / 2 - x) * 0.35, floor); g.stroke(); } // boards
+  studioCache.clear();
+  studioCache.set(key, c);
+  return c;
+}
+
+const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle, hoops: hoopsStyle, animator: animatorStyle, pleats: origamiPleatsStyle };
 
 export function createEffect(id) {
   const factory = FACTORIES[id] ?? FACTORIES[DEFAULT_STYLE];
