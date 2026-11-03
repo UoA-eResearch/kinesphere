@@ -1,5 +1,7 @@
 # Kinesphere
 
+[![Tests](https://github.com/UoA-eResearch/kinesphere/actions/workflows/tests.yml/badge.svg)](https://github.com/UoA-eResearch/kinesphere/actions/workflows/tests.yml)
+
 A browser app that watches you dance through your webcam, tracks your body with
 [MediaPipe Pose Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker)
 (or, optionally, [MoveNet](https://www.tensorflow.org/hub/tutorials/movenet) via TensorFlow.js),
@@ -401,12 +403,50 @@ js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, s
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export
 js/util.js        formatting and statistics helpers
+tests/unit/       Node tests of the modules without a browser
+tests/browser/    Playwright tests of the app in Chromium
+tests/helpers/    synthetic sessions with known ground truth, and the browser harness
 ```
 
 Dependencies are loaded from the CDN at runtime: `@mediapipe/tasks-vision` 1.0.1 with the official
 pose landmarker models; only when a MoveNet model is selected, `@tensorflow/tfjs` 4.22 with
 `@tensorflow-models/pose-detection` 2.1.3 and the MoveNet weights from TF Hub / Kaggle; and only
 when a 3D view is opened, `three` 0.170 (via the import map in `index.html`).
+
+### Tests
+
+The tests run on every push and pull request in GitHub Actions (`.github/workflows/tests.yml`).
+Running them locally needs Node 22 (only for the tests; the app has no build step):
+
+```sh
+npm ci
+npx playwright install chromium
+npm test                # everything (about two minutes)
+npm run test:unit       # just the Node tests (a couple of seconds)
+npm run test:browser    # just the browser tests
+```
+
+- **Unit tests** (`tests/unit/`) check the analysis against synthetic sessions with known ground
+  truth: the kinesphere class (near / medium / far) of each of ten phases, measured in 3D and in
+  2D, the space level (high / medium / low), the floor path recovered from a dancer walking a
+  known square, and that tracking glitches don't create speed spikes. They also cover the voice
+  command parser, the multiplayer wire format and invite links, game-mode scoring for every move
+  and song, the fitted body model, and the soft-body deformer (a still body is not deformed; a
+  fast swing bends the moving limb, scaled by strength; it springs back; teleports don't smear).
+- **Browser tests** (`tests/browser/`) serve the working tree to headless Chromium. They check
+  that every overlay style draws over the camera feed and on its own background, under a
+  per-frame time limit (`KINESPHERE_MAX_FRAME_MS`, default 250 ms), and the help panel and style
+  gallery (including at phone width). On the dashboard they check the kinesphere figures, value
+  toggles, hiding the explanations, the replay overlay, exports, the floor plot, IndexedDB storage
+  (including a 15-minute session) and comparing dancers. On the live view, with Chromium's fake
+  camera and a scripted dancer in place of the pose model's output, they check the styles, the
+  "Body partially out of frame" hint, recording and voice control (with a fake speech
+  recogniser). Multiplayer is tested with a host and two guests in separate browser contexts and
+  a local PeerJS signalling server.
+
+The live and multiplayer tests load MediaPipe and PeerJS from the CDN. Offline or behind a
+restrictive proxy, set `KINESPHERE_CDN_CACHE` to a directory of copies laid out as
+`<dir>/<host>/<path>` (e.g. `<dir>/cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/...`).
 
 ### Hosting on GitHub Pages
 
