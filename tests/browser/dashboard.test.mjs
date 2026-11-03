@@ -119,10 +119,10 @@ describe('storage', () => {
     const { page } = app;
     await importSession(page, serialize(floorSession(900, { glitches: false })));
     const banners = await page.$$eval('#view-dashboard .banner', b => b.map(x => x.textContent.trim()));
-    assert.ok(!banners.some(b => /could not|full|quota/i.test(b)), banners.join(' | '));
+    assert.ok(!banners.some(b => /not saved|could not|full|quota/i.test(b)), banners.join(' | '));
     await page.click('.nav-btn[data-view="sessions"]');
-    await page.waitForSelector('.session-item');
-    assert.ok((await page.$$eval('.session-item h2', h => h.map(x => x.textContent))).some(n => n.includes('900s')));
+    // the list re-renders asynchronously over the one shown last time, so wait for the new entry
+    await page.waitForFunction(() => [...document.querySelectorAll('.session-item h2')].some(h => h.textContent.includes('900s')), null, { timeout: 15000 });
   });
 });
 
