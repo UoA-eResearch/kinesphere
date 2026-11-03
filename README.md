@@ -32,7 +32,16 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    The **Overlay** selector (or <kbd>S</kbd> to cycle) picks how the pose is drawn: plain
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
    sparks that fly off fast-moving joints, a constellation, **Sandman**, **Fuzzy blur**,
-   **Origami**, **Origami pleats**, **Pencil sketch**, **Animator sketch** or **Hoops**. *Origami* folds the body from paper: each limb is a kite
+   **Origami**, **Origami pleats**, **Pencil sketch**, **Animator sketch** or **Hoops**.
+   The pencil, animator and origami-pleats styles draw a fitted human body rather than lines
+   between joints (`js/body-model.js`): each arm and leg is a tube along a smooth curve through
+   its joints, from the shoulder to the fingertips and the hip to the toes, with an anatomical
+   width profile (deltoid, bicep, elbow, forearm, wrist, hand; thigh, knee, calf, ankle, foot);
+   the torso is a curved outline over the neck, shoulders, chest, waist and hips; the head is an
+   egg shape with a narrower jaw on a neck. It works from MoveNet's 17 keypoints (hands and feet
+   are inferred from the forearm and shin) and uses MediaPipe's hand and foot points when it has
+   them. A spring-damped rig smooths the joints, with a little follow-through at the hands, feet
+   and head, so the body moves fluidly and briefly lost joints don't make it flicker. *Origami* folds the body from paper: each limb is a kite
    creased along the bone, with its two facets shaded by a light from the upper left, a
    four-facet torso and a faceted head, casting a soft shadow. *Pencil sketch* draws a loose
    graphite figure (doubled limb contours, sketched joints, a hatched torso) whose lines redraw
@@ -365,6 +374,7 @@ css/style.css     styles, light and dark themes
 js/app.js         UI state: camera, recording, gesture control, dashboard, session library
 js/pose.js        detection engines (MediaPipe, MoveNet), person tracker, skeleton drawing
 js/effects.js     overlay styles (skeleton, stick figure, neon, trails, sparks, constellation)
+js/body-model.js  fitted 2D human body (curved limbs, torso, head) and motion rig for the drawn styles
 js/smoothing.js   One Euro display smoothing for the overlay and replay
 js/viewer3d.js    three.js 3D figure viewer with WebXR (VR / AR) sessions
 js/game.js        game mode: song menu, Web Audio music, coach and lane rendering, scoring loop

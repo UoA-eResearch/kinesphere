@@ -5,6 +5,7 @@
 // and keeps its own state (particles, trails) so it animates smoothly between detections.
 
 import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton, drawHandSkeleton, drawFaceContours } from './pose.js';
+import { createRig, buildBody, smoothClosed, smoothOpen, tracePath } from './body-model.js';
 
 /** Colour set per tracked person (slot). Person 1 keeps the classic orange/blue. */
 export const PERSON_COLORS = [
@@ -702,17 +703,18 @@ function paperSheet(w, h) {
 function pencilStyle() {
   const BOIL = 0.14; // s between redraws of the wobble, like hand-drawn animation
   let clock = 0;
-  const LIMBS = [[11, 13, 0.11], [13, 15, 0.09], [12, 14, 0.11], [14, 16, 0.09], [23, 25, 0.14], [25, 27, 0.11], [24, 26, 0.14], [26, 28, 0.11]];
+  const rig = createRig();
   return {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       clock += dt;
       // without a camera picture behind, draw on paper (once, by the first person's effect)
       if (!videoVisible && person === 0) ctx.drawImage(paperSheet(w, h), 0, 0);
-      if (!lm) return;
-      const p = project(lm, offset, w, h, mirror);
-      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
-      const T = torsoPx(p);
+      if (!lm) { rig.reset(); return; }
+      const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
+      const B = buildBody(J, { minVis, samples: 10 });
+      if (!B) return;
+      const { T } = B;
       const frame = Math.floor(clock / BOIL);
       const rnd = seeded(frame * 97 + person * 13 + 1);
       const jit = a => (rnd() - 0.5) * 2 * a;
@@ -753,45 +755,43 @@ function pencilStyle() {
           ctx.stroke();
         }
       };
-      // torso: sketched outline with diagonal hatching
-      const tor = [[p.x[11], p.y[11]], [p.x[12], p.y[12]], [p.x[24], p.y[24]], [p.x[23], p.y[23]]];
+      // a pencil line along a curve, wobbling slowly and redrawn with every boil
+      const curve = (pts, alpha = 0.75, width = lw, close = false) => {
+        if (!pts || pts.length < 2) return;
+        const every = 6, knots = [];
+        for (let i = 0; i <= Math.ceil(pts.length / every); i++) knots.push([jit(T * 0.015), jit(T * 0.015)]);
+        const q = pts.map(([x, y], i) => { const k = i / every, k0 = Math.floor(k), f = k - k0, a = knots[k0], b = knots[Math.min(knots.length - 1, k0 + 1)]; return [x + a[0] + (b[0] - a[0]) * f, y + a[1] + (b[1] - a[1]) * f]; });
+        if (videoVisible) { ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = width * 2.6; tracePath(ctx, q, close); ctx.stroke(); }
+        ctx.strokeStyle = `${graphite}${(alpha * (0.75 + rnd() * 0.25)).toFixed(3)})`;
+        ctx.lineWidth = width * (0.8 + rnd() * 0.4);
+        tracePath(ctx, q, close); ctx.stroke();
+      };
+      // torso: the body's outline, sketched twice, with diagonal hatching inside it
+      const torso = B.torso;
       ctx.save();
-      ctx.beginPath(); tor.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+      tracePath(ctx, torso, true);
       ctx.clip();
-      const xs = tor.map(q => q[0]), ys = tor.map(q => q[1]);
+      const xs = torso.map(q => q[0]), ys = torso.map(q => q[1]);
       const x0 = Math.min(...xs) - T, x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys) + T;
       const gap = Math.max(4, T / 9);
       for (let x = x0; x < x1 + T; x += gap) stroke(x, y0, x + (y1 - y0), y1, 0.28, lw * 0.7);
       ctx.restore();
-      for (let i = 0; i < 4; i++) {
-        const [a, b] = [tor[i], tor[(i + 1) % 4]];
-        stroke(a[0], a[1], b[0], b[1], 0.8);
-        if (rnd() < 0.6) stroke(a[0], a[1], b[0], b[1], 0.45);
+      const kn = 6, top = [...torso.slice(9 * kn), ...torso.slice(0, 7 * kn + 1)];
+      curve(top, 0.8); if (rnd() < 0.7) curve(top, 0.4);
+      // limbs: both contours of each shaped limb (through the joints in a curve), a shading line
+      // down the middle, and sketched elbows and knees
+      for (const L of [...B.legs, ...B.arms]) {
+        if (!L) continue;
+        const o = L.outer === 'a' ? L.outline : L.outline.slice().reverse();
+        const inner = L === B.legs[0] || L === B.legs[1] ? 4 : 3;
+        curve(o.slice(0, o.length - inner), 0.8);
+        if (rnd() < 0.5) curve(L.centre.map((c, i) => [(c[0] * 2 + L[L.outer][i][0]) / 3, (c[1] * 2 + L[L.outer][i][1]) / 3]), 0.25, lw * 0.6);
+        const knee = L.joints[1], r = Math.hypot(L.a[9][0] - L.centre[9][0], L.a[9][1] - L.centre[9][1]);
+        loop(knee[0], knee[1], r * 0.8, r * 0.8);
       }
-      // limbs: two contour lines either side of the bone, with sketched joints
-      for (const [a, b, thick] of LIMBS) {
-        if (p.v[a] < minVis || p.v[b] < minVis) continue;
-        const dx = p.x[b] - p.x[a], dy = p.y[b] - p.y[a], len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len, ny = dx / len, r0 = thick * T, r1 = thick * T * 0.8;
-        stroke(p.x[a] + nx * r0, p.y[a] + ny * r0, p.x[b] + nx * r1, p.y[b] + ny * r1);
-        stroke(p.x[a] - nx * r0, p.y[a] - ny * r0, p.x[b] - nx * r1, p.y[b] - ny * r1);
-        if (rnd() < 0.5) stroke(p.x[a] + nx * r0 * 0.4, p.y[a] + ny * r0 * 0.4, p.x[b] + nx * r1 * 0.4, p.y[b] + ny * r1 * 0.4, 0.25, lw * 0.6); // shading
-        if (b === 13 || b === 14 || b === 25 || b === 26) loop(p.x[b], p.y[b], r1 * 0.9, r1 * 0.9);
-      }
-      // hands and feet: small ovals / wedges
-      for (const [a, b, s2] of [[13, 15, 0.1], [14, 16, 0.1]]) {
-        if (p.v[a] < minVis || p.v[b] < minVis) continue;
-        const ang = Math.atan2(p.y[b] - p.y[a], p.x[b] - p.x[a]);
-        loop(p.x[b] + Math.cos(ang) * T * s2, p.y[b] + Math.sin(ang) * T * s2, T * 0.12, T * 0.08, ang);
-      }
-      for (const k of [27, 28]) if (p.v[k] >= minVis) { stroke(p.x[k], p.y[k], p.x[k] + (k === 27 ? -1 : 1) * T * 0.04, p.y[k] + T * 0.1, 0.8); stroke(p.x[k] - T * 0.08, p.y[k] + T * 0.1, p.x[k] + T * 0.12, p.y[k] + T * 0.1, 0.8); }
       // head and neck
-      const head = neckAndHead(p, minVis);
-      if (head) {
-        stroke(head.nx - T * 0.04, head.ny, head.hx - T * 0.04, head.hy + head.r * 0.9, 0.7);
-        stroke(head.nx + T * 0.04, head.ny, head.hx + T * 0.04, head.hy + head.r * 0.9, 0.7);
-        loop(head.hx, head.hy, head.r * 0.95, head.r * 1.15, Math.atan2(head.hy - head.ny, head.hx - head.nx) + Math.PI / 2);
-      }
+      if (B.neck) { curve(B.neck.a, 0.7); curve(B.neck.b, 0.7); }
+      if (B.head) { curve(B.head.outline, 0.8, lw, true); if (rnd() < 0.6) curve(B.head.outline, 0.4, lw * 0.8, true); }
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
@@ -1020,134 +1020,94 @@ function tonedSheet(w, h) {
 function animatorStyle() {
   const BOIL = 0.12; // s between redraws, like drawn-on-twos animation
   let clock = 0;
+  const rig = createRig();
   return {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       clock += dt;
       if (!videoVisible && person === 0) ctx.drawImage(tonedSheet(w, h), 0, 0);
-      if (!lm) return;
-      const p = project(lm, offset, w, h, mirror);
-      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
-      const T = torsoPx(p);
+      if (!lm) { rig.reset(); return; }
+      const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
+      const B = buildBody(J, { minVis, samples: 12 });
+      if (!B) return;
+      const { T } = B;
       const chalk = person % 2 === 1; // dancers alternate graphite and white chalk
       const ink = chalk ? '248,244,236' : '40,33,28', under = chalk ? '30,24,20' : '255,255,255';
       const rnd = seeded(Math.floor(clock / BOIL) * 131 + person * 17 + 3);
-      const jit = a => (rnd() - 0.5) * 2 * a;
       const lw = Math.max(1, T / 85);
-      const ok = (...ids) => ids.every(i => p.v[i] >= minVis);
-      const P = i => [p.x[i], p.y[i]];
-      const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];
-      const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
-      const perp = u => [-u[1], u[0]];
       ctx.save();
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      // one hand-drawn line through points (smoothed), wobbling a little on every redraw
-      const line = (pts, { alpha = 0.85, width = lw, wob = T * 0.012, close = false } = {}) => {
-        const q = pts.map(([x, y]) => [x + jit(wob), y + jit(wob)]);
-        if (close) q.push(q[0]);
-        const path = () => {
-          ctx.beginPath();
-          ctx.moveTo(q[0][0], q[0][1]);
-          for (let i = 1; i < q.length - 1; i++) ctx.quadraticCurveTo(q[i][0], q[i][1], (q[i][0] + q[i + 1][0]) / 2, (q[i][1] + q[i + 1][1]) / 2);
-          ctx.lineTo(q[q.length - 1][0], q[q.length - 1][1]);
-        };
-        if (videoVisible) { ctx.strokeStyle = `rgba(${under},0.22)`; ctx.lineWidth = width * 2.4; path(); ctx.stroke(); }
-        ctx.strokeStyle = `rgba(${ink},${(alpha * (0.8 + 0.2 * rnd())).toFixed(3)})`;
-        ctx.lineWidth = width * (0.75 + 0.5 * rnd());
-        path(); ctx.stroke();
-      };
-      // a limb segment as two contour lines that swell (muscle) a third of the way down
-      const limb = (a, b, wa, wb, bulge, at = 0.35) => {
-        if (!ok(a, b)) return;
-        const A = P(a), B = P(b), u = unit(A, B), n = perp(u), M = mix(A, B, at);
-        for (const sgn of [1, -1]) {
-          line([add(add(A, u, -T * 0.02), n, sgn * wa * T), add(M, n, sgn * bulge * T * (sgn > 0 ? 1 : 0.85)), add(add(B, u, T * 0.02), n, sgn * wb * T)]);
+      // a hand-drawn stroke along a curve: a slow wobble (offsets every few points, eased between)
+      // that changes with every redraw, a slightly varying weight, and sometimes a second pass
+      const stroke = (pts, { alpha = 0.85, width = lw, wob = T * 0.012, passes = 1, close = false } = {}) => {
+        if (!pts || pts.length < 2) return;
+        for (let pass = 0; pass < passes; pass++) {
+          const every = 5, knots = [];
+          for (let i = 0; i <= Math.ceil(pts.length / every); i++) knots.push([(rnd() - 0.5) * 2 * wob, (rnd() - 0.5) * 2 * wob]);
+          const q = pts.map(([x, y], i) => {
+            const k = i / every, k0 = Math.floor(k), f = k - k0, e = f * f * (3 - 2 * f);
+            const a = knots[k0], b = knots[Math.min(knots.length - 1, k0 + 1)];
+            return [x + a[0] + (b[0] - a[0]) * e, y + a[1] + (b[1] - a[1]) * e];
+          });
+          if (videoVisible) { ctx.strokeStyle = `rgba(${under},0.22)`; ctx.lineWidth = width * 2.4; tracePath(ctx, q, close); ctx.stroke(); }
+          ctx.strokeStyle = `rgba(${ink},${(alpha * (pass ? 0.55 : 1) * (0.82 + 0.18 * rnd())).toFixed(3)})`;
+          ctx.lineWidth = width * (pass ? 0.7 : 0.8 + 0.45 * rnd());
+          tracePath(ctx, q, close);
+          ctx.stroke();
         }
       };
-      const shL = P(11), shR = P(12), hpL = P(23), hpR = P(24);
-      const shM = mix(shL, shR, 0.5), hpM = mix(hpL, hpR, 0.5);
-      const axis = unit(shM, hpM), side = perp(axis);
-      const outOf = pt => { const d = (pt[0] - shM[0]) * side[0] + (pt[1] - shM[1]) * side[1]; return [side[0] * Math.sign(d || 1), side[1] * Math.sign(d || 1)]; };
+      // a limb as one line: up the outer side, round the hand or foot, back down the inner side;
+      // the parts inside the torso are left out so the body reads as one silhouette
+      const limbLine = (L, skipOuter, skipInner) => {
+        if (!L) return;
+        const o = L.outer === 'a' ? L.outline : L.outline.slice().reverse();
+        stroke(o.slice(skipOuter, o.length - skipInner), { passes: 2 });
+      };
       // soft cast shadow on the floor, falling to one side as under a low light
-      const feet = [27, 28].filter(i => p.v[i] >= minVis).map(P);
+      const feet = [27, 28].filter(i => J.v[i] >= minVis).map(i => [J.x[i], J.y[i]]);
       if (feet.length) {
-        const fy = Math.max(...feet.map(f => f[1])) + T * 0.05, fx = feet.reduce((a, f) => a + f[0], 0) / feet.length;
+        const low = Math.max(...feet.map(f => f[1])), planted = feet.filter(f => low - f[1] < T * 0.25); // ignore a raised foot
+        const fy = low + T * 0.06, fx = planted.reduce((a, f) => a + f[0], 0) / planted.length;
         ctx.save();
         ctx.filter = `blur(${Math.max(2, T * 0.05).toFixed(1)}px)`;
         ctx.fillStyle = 'rgba(60,45,32,0.28)';
         ctx.beginPath();
-        ctx.ellipse(fx + T * 0.55, fy, T * 0.75, T * 0.07, -0.04, 0, Math.PI * 2);
+        ctx.ellipse(fx + T * 0.55, fy, T * 0.8, T * 0.075, -0.04, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
-      // legs: trouser contours, the crotch, simple shoes and a ground ellipse under each foot
-      limb(23, 25, 0.19, 0.13, 0.17); limb(25, 27, 0.13, 0.1, 0.12, 0.3);
-      limb(24, 26, 0.19, 0.13, 0.17); limb(26, 28, 0.13, 0.1, 0.12, 0.3);
-      const crotch = add(hpM, axis, T * 0.16);
-      line([add(hpL, outOf(hpL), -T * 0.02), crotch, add(hpR, outOf(hpR), -T * 0.02)], { alpha: 0.7 });
-      for (const [k, a] of [[27, 25], [28, 26]]) {
-        if (!ok(k)) continue;
-        const F = P(k), toe = add(F, outOf(F), T * 0.2);
-        line([add(F, [0, -1], T * 0.04), add(toe, [0, -1], T * 0.02), add(toe, [0, 1], T * 0.04), add(F, [0, 1], T * 0.06)], { alpha: 0.8 });
-        line([add(F, [0, 1], T * 0.07), add(add(F, outOf(F), T * 0.12), [0, 1], T * 0.09)], { alpha: 0.4, width: lw * 0.8 });
-        void a;
+      limbLine(B.legs[0], 2, 4); limbLine(B.legs[1], 2, 4);
+      // torso silhouette from one hip, over the shoulders, to the other (the legs close the bottom)
+      const t = B.torso, kn = 6;
+      stroke([...t.slice(9 * kn), ...t.slice(0, 7 * kn + 1)], { passes: 2 });
+      // construction lines: centre line, chest line, the near half of the waist ellipse
+      stroke(smoothOpen([[B.shM[0] - B.axis[0] * T * 0.04, B.shM[1] - B.axis[1] * T * 0.04], [(B.shM[0] + B.hpM[0]) / 2, (B.shM[1] + B.hpM[1]) / 2], B.crotch], 6), { alpha: 0.45, width: lw * 0.8 });
+      stroke(smoothOpen(B.chest, 6), { alpha: 0.5, width: lw * 0.8 });
+      const wv = B.waist, ell = [];
+      for (let i = 0; i <= 16; i++) { const a = 0.08 + (Math.PI - 0.16) * i / 16; ell.push([wv.centre[0] + Math.cos(a) * wv.rx * Math.cos(wv.rot) - Math.sin(a) * wv.ry * Math.sin(wv.rot), wv.centre[1] + Math.cos(a) * wv.rx * Math.sin(wv.rot) + Math.sin(a) * wv.ry * Math.cos(wv.rot)]); }
+      stroke(ell, { alpha: 0.6, width: lw * 0.85, passes: 2 });
+      // arms: the outer line runs on from the shoulder cap; the inner line starts at the armpit
+      limbLine(B.arms[0], 0, 4); limbLine(B.arms[1], 0, 4);
+      for (const L of B.arms) { // a thumb on each mitten hand
+        if (!L) continue;
+        const [, , Wp, tip] = L.joints, d = [tip[0] - Wp[0], tip[1] - Wp[1]], n = [-d[1], d[0]];
+        const s2 = L.outer === 'a' ? -1 : 1;
+        stroke([[Wp[0] + d[0] * 0.15 + n[0] * 0.25 * s2, Wp[1] + d[1] * 0.15 + n[1] * 0.25 * s2], [Wp[0] + d[0] * 0.55 + n[0] * 0.55 * s2, Wp[1] + d[1] * 0.55 + n[1] * 0.55 * s2]], { alpha: 0.7, width: lw * 0.8 });
       }
-      // torso: outer contours, shoulder line, centre line, chest line and the waist ellipse
-      for (const [sh, hp] of [[shL, hpL], [shR, hpR]]) {
-        const o = outOf(sh);
-        line([add(sh, o, T * 0.05), add(mix(sh, hp, 0.3), o, T * 0.03), add(mix(sh, hp, 0.62), o, -T * 0.04), add(hp, o, T * 0.07)]);
-      }
-      line([add(shL, outOf(shL), T * 0.04), add(shM, axis, -T * 0.06), add(shR, outOf(shR), T * 0.04)]);
-      line([add(shM, axis, -T * 0.04), mix(shM, hpM, 0.5), add(hpM, axis, T * 0.05)], { alpha: 0.5, width: lw * 0.8 });
-      const chest = t => [add(mix(shL, hpL, t), outOf(shL), T * 0.02), add(mix(shM, hpM, t), axis, T * 0.02), add(mix(shR, hpR, t), outOf(shR), T * 0.02)];
-      line(chest(0.36), { alpha: 0.55, width: lw * 0.85 });
-      const wc = mix(shM, hpM, 0.86), wr = Math.hypot(hpR[0] - hpL[0], hpR[1] - hpL[1]) * 0.75, rot = Math.atan2(side[1], side[0]);
-      ctx.save(); // waist ellipse: just its near half, sketched twice
-      for (let k = 0; k < 2; k++) {
-        ctx.strokeStyle = `rgba(${ink},${(0.6 + 0.2 * rnd()).toFixed(3)})`;
-        ctx.lineWidth = lw * (0.7 + 0.4 * rnd());
-        ctx.beginPath();
-        ctx.ellipse(wc[0] + jit(T * 0.01), wc[1] + jit(T * 0.01), wr * (1 + jit(0.04)), T * (0.07 + jit(0.01)), rot, 0.05 + jit(0.1), Math.PI - 0.05 + jit(0.1));
-        ctx.stroke();
-      }
-      ctx.restore();
-      // arms with shoulder ovals, mitten hands with a thumb
-      limb(11, 13, 0.12, 0.085, 0.12); limb(13, 15, 0.085, 0.055, 0.095, 0.3);
-      limb(12, 14, 0.12, 0.085, 0.12); limb(14, 16, 0.085, 0.055, 0.095, 0.3);
-      for (const [s, e] of [[11, 13], [12, 14]]) {
-        if (!ok(s, e)) continue;
-        const S = P(s), u = unit(S, P(e)), c = add(S, u, T * 0.1);
-        ctx.strokeStyle = `rgba(${ink},0.7)`; ctx.lineWidth = lw * 0.9;
-        ctx.beginPath(); ctx.ellipse(c[0] + jit(T * 0.01), c[1] + jit(T * 0.01), T * 0.13, T * 0.085, Math.atan2(u[1], u[0]), 0, Math.PI * 2); ctx.stroke();
-      }
-      for (const [e, wri] of [[13, 15], [14, 16]]) {
-        if (!ok(e, wri)) continue;
-        const W = P(wri), u = unit(P(e), W), n = perp(u), tip = add(W, u, T * 0.2);
-        line([add(W, n, T * 0.06), add(tip, n, T * 0.04), add(tip, u, T * 0.03), add(tip, n, -T * 0.035), add(W, n, -T * 0.055)], { alpha: 0.8 });
-        line([add(W, n, T * 0.055), add(add(W, u, T * 0.08), n, T * 0.11)], { alpha: 0.7, width: lw * 0.8 }); // thumb
-      }
-      // head: a boxy, slightly tilted head with a jaw, an ear and a stroke of hair; the neck
-      const head = neckAndHead(p, minVis);
-      if (head) {
-        const up = unit([head.nx, head.ny], [head.hx, head.hy]), sd = perp(up), C = [head.hx, head.hy];
-        const hw = head.r * 0.8, hh = head.r * 1.1;
-        const tl = add(add(C, up, hh), sd, -hw), tr = add(add(C, up, hh), sd, hw);
-        const jr = add(add(C, up, -hh * 0.45), sd, hw * 0.95), jl = add(add(C, up, -hh * 0.45), sd, -hw * 0.9);
-        const chin = add(add(C, up, -hh * 0.95), sd, hw * 0.1);
-        line([tl, tr, jr, chin, jl, tl], { alpha: 0.85 });
-        line([add(tl, sd, hw * 0.1), add(add(C, up, hh * 1.15), sd, hw * 0.2), add(add(tr, up, -hh * 0.35), sd, hw * 0.1)], { alpha: 0.6, width: lw * 0.8 }); // hair
-        const ear = add(add(C, up, hh * 0.05), sd, hw * 0.9);
-        ctx.strokeStyle = `rgba(${ink},0.6)`; ctx.lineWidth = lw * 0.8;
-        ctx.beginPath(); ctx.ellipse(ear[0], ear[1], head.r * 0.14, head.r * 0.22, Math.atan2(up[1], up[0]), 0, Math.PI * 2); ctx.stroke();
-        const base = add(shM, axis, -T * 0.05);
-        line([add(jl, sd, hw * 0.35), add(base, sd, -T * 0.08)], { alpha: 0.75 });
-        line([add(jr, sd, -hw * 0.3), add(base, sd, T * 0.08)], { alpha: 0.75 });
+      // neck and head: the sides of the neck, an egg-shaped head, an ear and a sweep of hair
+      if (B.neck) { stroke(B.neck.a, { alpha: 0.75 }); stroke(B.neck.b, { alpha: 0.75 }); }
+      if (B.head) {
+        const H = B.head;
+        stroke(H.outline, { close: true, passes: 2, wob: T * 0.008 });
+        const sd = [-H.up[1], H.up[0]];
+        const at = (u, v) => [H.centre[0] + sd[0] * u * H.hw + H.up[0] * v * H.hh, H.centre[1] + sd[1] * u * H.hw + H.up[1] * v * H.hh];
+        stroke(smoothOpen([at(-0.95, 0.15), at(-0.7, 0.85), at(0, 1.08), at(0.75, 0.8), at(0.98, 0.25)], 5), { alpha: 0.6, width: lw * 0.9 });
+        stroke(smoothOpen([at(0.85, 0.12), at(0.98, 0.02), at(0.95, -0.2), at(0.85, -0.25)], 4), { alpha: 0.6, width: lw * 0.75 }); // ear
       }
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
-    reset() { clock = 0; },
+    reset() { clock = 0; rig.reset(); },
   };
 }
 
@@ -1157,6 +1117,7 @@ function animatorStyle() {
 function origamiPleatsStyle() {
   const LIGHT = [-0.6, -0.8]; // from the upper left
   let flap = [0, 0], flapV = [0, 0], lastHip = null;
+  const rig = createRig();
   const PAPERS = ['#f3e9d4', '#f4e2bc', '#efe5dd', '#eee8cf', '#f6dfc4', '#e9e6d8'];
   const AMBER = [214, 158, 76];
   const tint = (hex, f) => { // f: 1 = facing the light (paper), 0 = in shadow (amber)
@@ -1168,107 +1129,89 @@ function origamiPleatsStyle() {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       if (!videoVisible && person === 0) ctx.drawImage(studioBackdrop(w, h), 0, 0);
-      if (!lm) { lastHip = null; return; }
-      const p = project(lm, offset, w, h, mirror);
-      if (![11, 12, 23, 24].every(i => p.v[i] >= minVis)) return;
+      if (!lm) { lastHip = null; rig.reset(); return; }
+      const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
+      // the paper body: few samples per limb, so its outline is folded into straight-edged facets
+      const B = buildBody(J, { minVis, samples: 4, limbScale: 1.15, legScale: 1.4, legFlare: 0.14 });
+      if (!B) return;
       const paper = PAPERS[person % PAPERS.length];
-      const T = torsoPx(p);
-      const ok = (...ids) => ids.every(i => p.v[i] >= minVis);
-      const P = i => [p.x[i], p.y[i]];
+      const { T, axis, outOf, shL, shR, hpL, hpR, shM, hpM } = B;
       const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];
       const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
       const unit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
       const perp = u => [-u[1], u[0]];
-      const facing = n => 0.55 + 0.45 * (n[0] * LIGHT[0] + n[1] * LIGHT[1]); // a facet's "normal" in the picture plane
+      const facing = n => 0.55 + 0.45 * (n[0] * LIGHT[0] + n[1] * LIGHT[1]);
       const polys = [], creases = [];
-      const facet = (pts, f) => polys.push({ pts, f });
-      const crease = (a, b, alpha = 0.35) => creases.push({ a, b, alpha });
-      const shL = P(11), shR = P(12), hpL = P(23), hpR = P(24);
-      const shM = mix(shL, shR, 0.5), hpM = mix(hpL, hpR, 0.5);
-      const axis = unit(shM, hpM), side = perp(axis);
-      const outOf = pt => { const d = (pt[0] - shM[0]) * side[0] + (pt[1] - shM[1]) * side[1]; return [side[0] * Math.sign(d || 1), side[1] * Math.sign(d || 1)]; };
+      const facet = (pts, f, clip = null) => polys.push({ pts, f, clip });
+      const crease = (pts, alpha = 0.35) => creases.push({ pts, alpha });
+      // a limb folded lengthwise: each half of the tube a strip of facets, lit by which way it faces
+      const foldLimb = (L, light = 1) => {
+        if (!L) return;
+        const n = L.centre.length;
+        for (let i = 0; i < n - 1; i++) {
+          for (const sideKey of ['a', 'b']) {
+            const S = L[sideKey], c0 = L.centre[i], c1 = L.centre[i + 1];
+            const nrm = unit(mix(c0, c1, 0.5), mix(S[i], S[i + 1], 0.5));
+            facet([c0, S[i], S[i + 1], c1], facing(nrm) * light * (i % 2 ? 0.94 : 1));
+          }
+        }
+        const tipEnd = L.centre[n - 1], tipDir = unit(L.centre[n - 2], tipEnd);
+        facet([L.a[n - 1], add(tipEnd, tipDir, T * 0.08), L.b[n - 1]], 0.7); // the pointed end
+        crease(L.centre, 0.4);
+      };
       // waist flaps hang on a damped spring, so they swing behind quick hip movement
       if (lastHip && dt > 0) { flap[0] -= (hpM[0] - lastHip[0]) / T; flap[1] -= (hpM[1] - lastHip[1]) / T; }
       lastHip = hpM;
       const k = (2 * Math.PI * 1.2) ** 2, damp = 2 * 0.3 * Math.sqrt(k), st = Math.min(dt, 0.05);
       for (let i = 0; i < 2; i++) { flapV[i] += (-k * flap[i] - damp * flapV[i]) * st; flap[i] = Math.max(-0.8, Math.min(0.8, flap[i] + flapV[i] * st)); }
-      // trousers: one long creased panel per leg, folded along hip-knee-ankle, flaring at the hem
-      for (const [hp, kn, an] of [[23, 25, 27], [24, 26, 28]]) {
-        if (!ok(hp, kn)) continue;
-        const H = P(hp), K = P(kn), A = ok(an) ? P(an) : add(K, unit(H, K), T * 0.8);
-        const o = outOf(H), uk = unit(H, K), ua = unit(K, A), nk = perp(uk), na = perp(ua);
-        const sg = (nk[0] * o[0] + nk[1] * o[1]) > 0 ? 1 : -1;
-        const ho = add(H, nk, sg * T * 0.27), hi = add(H, nk, -sg * T * 0.12);
-        const ko = add(K, nk, sg * T * 0.2), ki = add(K, nk, -sg * T * 0.16);
-        const ao = add(A, na, sg * T * 0.27), ai = add(A, na, -sg * T * 0.24); // flared hem
-        facet([ho, H, K, ko], facing(o)); facet([H, hi, ki, K], facing([-o[0], -o[1]]) * 0.9);
-        facet([ko, K, A, ao], facing(o) * 0.95); facet([K, ki, ai, A], facing([-o[0], -o[1]]) * 0.85);
-        crease(mix(ho, H, 0.5), mix(ao, A, 0.5), 0.25); crease(mix(hi, H, 0.4), mix(ai, A, 0.4), 0.2);
-        crease(H, K); crease(K, A);
-        const toe = add(A, o, T * 0.22); // pointed slipper
-        facet([add(A, na, sg * T * 0.08), toe, add(A, ua, T * 0.08)], 0.7);
-      }
-      // waist flaps
+      foldLimb(B.legs[0], 0.95); foldLimb(B.legs[1], 0.95);
+      for (const L of B.legs) if (L) { const n = L.centre.length; crease(L.a.map((p, i) => mix(p, L.centre[i], 0.5)).slice(0, n - 1), 0.22); crease(L.b.map((p, i) => mix(p, L.centre[i], 0.45)).slice(0, n - 1), 0.18); }
       for (const hp of [hpL, hpR]) {
         const o = outOf(hp), base1 = add(add(hp, axis, -T * 0.12), o, -T * 0.08), base2 = add(add(hp, axis, -T * 0.02), o, T * 0.3);
         const tip = add(add(add(hp, o, T * 0.5), axis, T * 0.5), [flap[0], flap[1]], T * 0.7);
         const mid = mix(mix(base1, base2, 0.5), tip, 0.45);
-        facet([base1, tip, mid], facing(o) * 0.95); facet([mid, tip, base2], facing(o) * 0.7); // folded once down the middle
-        crease(mid, tip, 0.35);
+        facet([base1, tip, mid], facing(o) * 0.95); facet([mid, tip, base2], facing(o) * 0.7);
+        crease([mid, tip], 0.35);
       }
-      // torso: a fan of accordion pleats spreading from the neck to the shoulders and waist
-      const neck = add(shM, axis, T * 0.05);
-      const flL = add(add(shL, outOf(shL), T * 0.3), axis, -T * 0.12), flR = add(add(shR, outOf(shR), T * 0.3), axis, -T * 0.12);
-      const wL = add(mix(shL, hpL, 0.9), outOf(shL), T * 0.04), wR = add(mix(shR, hpR, 0.9), outOf(shR), T * 0.04);
-      const edge = [flL, mix(flL, wL, 0.5), wL, mix(wL, wR, 0.25), mix(wL, wR, 0.5), mix(wL, wR, 0.75), wR, mix(wR, flR, 0.5), flR];
-      const pts = [];
-      for (let i = 0; i < edge.length - 1; i++) for (let j = 0; j < 2; j++) pts.push(mix(edge[i], edge[i + 1], j / 2));
-      pts.push(edge[edge.length - 1]);
-      for (let i = 0; i < pts.length - 1; i++) {
-        const mid = mix(pts[i], pts[i + 1], 0.5), dir = unit(neck, mid);
-        facet([neck, pts[i], pts[i + 1]], (i % 2 ? 0.55 : 0.95) * facing(perp(dir)) + 0.1);
+      // torso: the body's outline folded into facets, covered by a fan of pleats from the neck
+      const knots = B.torsoKnots, torsoPoly = smoothClosed(knots, 2);
+      facet(torsoPoly, 0.8);
+      const neck = add(shM, axis, T * 0.02);
+      const fanEdge = smoothOpen([...knots.slice(1, 8), B.crotch, ...knots.slice(9, 16)], 2);
+      for (let i = 0; i < fanEdge.length - 1; i++) {
+        const dir = unit(neck, mix(fanEdge[i], fanEdge[i + 1], 0.5));
+        facet([neck, fanEdge[i], fanEdge[i + 1]], (i % 2 ? 0.55 : 0.95) * facing(perp(dir)) + 0.1, torsoPoly);
       }
-      // sleeves: long tapering prisms, lit on top and shaded beneath, ending in a fine point
-      for (const [s, e, wr] of [[11, 13, 15], [12, 14, 16]]) {
-        if (!ok(s, e)) continue;
-        const S = P(s), E = P(e), Wp = ok(wr) ? P(wr) : add(E, unit(S, E), T * 0.55);
-        const u1 = unit(S, E), n1 = perp(u1), u2 = unit(E, Wp), n2 = perp(u2);
-        const up1 = (n1[1] < 0 ? 1 : -1), up2 = (n2[1] < 0 ? 1 : -1);
-        facet([add(S, n1, up1 * T * 0.13), add(E, n1, up1 * T * 0.08), E, S], facing([n1[0] * up1, n1[1] * up1]));
-        facet([S, E, add(E, n1, -up1 * T * 0.07), add(S, n1, -up1 * T * 0.1)], facing([-n1[0] * up1, -n1[1] * up1]) * 0.8);
-        facet([add(E, n2, up2 * T * 0.08), add(Wp, n2, up2 * T * 0.04), Wp, E], facing([n2[0] * up2, n2[1] * up2]));
-        facet([E, Wp, add(Wp, n2, -up2 * T * 0.035), add(E, n2, -up2 * T * 0.065)], facing([-n2[0] * up2, -n2[1] * up2]) * 0.8);
-        const tip = add(Wp, u2, T * 0.26);
-        facet([add(Wp, n2, T * 0.035), tip, add(Wp, n2, -T * 0.035)], 0.75);
-        crease(S, E); crease(E, Wp);
+      // sharp shoulder flaps
+      for (const sh of [shL, shR]) {
+        const o = outOf(sh), tipP = add(add(sh, o, T * 0.34), axis, -T * 0.13);
+        facet([add(sh, o, -T * 0.12), tipP, add(add(sh, o, T * 0.05), axis, T * 0.16)], facing([o[0] * 0.5, -0.8]));
       }
-      // head: a four-sided pyramid cap over a narrow, pointed face
-      const head = neckAndHead(p, minVis);
-      if (head) {
-        const up = unit([head.nx, head.ny], [head.hx, head.hy]), sd = perp(up), C = add([head.hx, head.hy], up, head.r * 0.1);
-        const r = head.r * 1.4;
-        const apex = add(C, up, r * 1.05), L = add(add(C, sd, -r * 1.05), up, -r * 0.05), R = add(add(C, sd, r * 1.05), up, -r * 0.05), F = add(add(C, up, -r * 0.3), sd, r * 0.15);
+      foldLimb(B.arms[0]); foldLimb(B.arms[1]);
+      // head: a four-sided pyramid cap over a narrow pointed face, on a folded neck
+      if (B.head) {
+        const Hd = B.head, up = Hd.up, sd = perp(up), C = add(Hd.centre, up, Hd.hh * 0.1);
+        const r = Hd.hw * 1.45;
+        const apex = add(C, up, r * 1.05), Lp = add(add(C, sd, -r * 1.05), up, -r * 0.05), Rp = add(add(C, sd, r * 1.05), up, -r * 0.05), F = add(add(C, up, -r * 0.3), sd, r * 0.15);
         const chin = add(C, up, -r * 1.0);
-        facet([add(L, sd, r * 0.45), add(R, sd, -r * 0.45), chin], 0.45); // face beneath the cap
-        facet([apex, L, F], facing([-0.8, -0.6]));
-        facet([apex, F, R], facing([0.8, -0.3]) * 0.75);
-        crease(apex, F, 0.4);
-        facet([add(chin, sd, -r * 0.12), add(neck, sd, -T * 0.06), add(neck, sd, T * 0.06), add(chin, sd, r * 0.12)], 0.55); // neck
+        facet([add(chin, sd, -r * 0.12), add(neck, sd, -T * 0.06), add(neck, sd, T * 0.06), add(chin, sd, r * 0.12)], 0.55);
+        facet([add(Lp, sd, r * 0.45), add(Rp, sd, -r * 0.45), chin], 0.45);
+        facet([apex, Lp, F], facing([-0.8, -0.6]));
+        facet([apex, F, Rp], facing([0.8, -0.3]) * 0.75);
+        crease([apex, F], 0.4);
       }
-      const path = q => { ctx.beginPath(); ctx.moveTo(q[0][0], q[0][1]); for (let i = 1; i < q.length; i++) ctx.lineTo(q[i][0], q[i][1]); ctx.closePath(); };
       ctx.save();
       ctx.lineJoin = 'round';
-      // soft shadow behind the figure
-      ctx.save();
+      ctx.save(); // soft shadow behind the figure
       ctx.filter = `blur(${Math.max(2, T * 0.06).toFixed(1)}px)`;
       ctx.fillStyle = 'rgba(40,25,10,0.22)';
       const off = T * 0.07;
-      for (const q of polys) { path(q.pts.map(([x, y]) => [x + off, y + off * 0.6])); ctx.fill(); }
+      for (const q of polys) if (!q.clip) { tracePath(ctx, q.pts.map(([x, y]) => [x + off, y + off * 0.6]), true); ctx.fill(); }
       ctx.restore();
-      // facets: paper colour by how much each faces the light, with a gentle gradient across it
       ctx.lineWidth = Math.max(0.6, T / 160);
       for (const q of polys) {
-        path(q.pts);
+        if (q.clip) { ctx.save(); tracePath(ctx, q.clip, true); ctx.clip(); }
+        tracePath(ctx, q.pts, true);
         const a = q.pts[0], b = q.pts[Math.floor(q.pts.length / 2)];
         const g = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
         g.addColorStop(0, tint(paper, q.f + 0.08)); g.addColorStop(1, tint(paper, q.f - 0.12));
@@ -1276,15 +1219,16 @@ function origamiPleatsStyle() {
         ctx.fill();
         ctx.strokeStyle = 'rgba(150,105,50,0.35)';
         ctx.stroke();
+        if (q.clip) ctx.restore();
       }
       for (const c of creases) {
         ctx.strokeStyle = `rgba(150,100,45,${c.alpha})`;
-        ctx.beginPath(); ctx.moveTo(c.a[0], c.a[1]); ctx.lineTo(c.b[0], c.b[1]); ctx.stroke();
+        tracePath(ctx, c.pts, false); ctx.stroke();
       }
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
-    reset() { flap = [0, 0]; flapV = [0, 0]; lastHip = null; },
+    reset() { flap = [0, 0]; flapV = [0, 0]; lastHip = null; rig.reset(); },
   };
 }
 const clamp01 = v => Math.max(0, Math.min(1, v));
