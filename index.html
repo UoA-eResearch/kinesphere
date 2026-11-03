@@ -110,7 +110,7 @@
         </label>
         <button id="btn-mp" class="btn btn-sm" aria-expanded="false" aria-controls="mp-panel" title="Invite someone to dance with you online: you see each other's avatars">👥 Dance together</button>
         <button id="btn-voice" class="btn btn-sm voice-btn" aria-pressed="false" title="Change settings hands-free by speaking (M). Say “help” for the list of commands." hidden>🎤 Voice control</button>
-        <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="About these settings">?</button>
+        <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="Help: models, people and overlay styles">?</button>
       </div>
       <div id="sand-controls" class="effect-controls" hidden>
         <span class="effect-controls-title">Sandman particles</span>
@@ -127,7 +127,7 @@
       <section id="mp-panel" class="mp-panel" aria-label="Dance together online" hidden></section>
       <p id="setting-help" class="setting-help"></p>
       <details id="help-panel" class="help-panel">
-        <summary>About the model and people settings</summary>
+        <summary>Help: models, people and overlay styles</summary>
         <h3 class="first">Feature matrix</h3>
         <div class="table-scroll"><table class="data-table" id="model-matrix"></table></div>
         <p class="fine">Face: MediaPipe pose models give 11 face points (eyes, ears, nose, mouth); Holistic adds a 478-point mesh drawn live only. "Depth" is MediaPipe's per-joint z estimate used by the 3D view. Dashboard metrics use 13 major joints that every model provides.</p>
@@ -151,6 +151,9 @@
           <dd>All metrics use the same 13 major joints, which every model provides, so kinesphere, activity, level, speed and path are comparable between models. Each session records which model and how many people were used. Settings cannot be changed while recording; changing them re-initialises the detector (the first use of a model downloads it, from 5 to 30 MB, with a progress bar in the preview; later uses come from the cache below).</dd>
         </dl>
         <p class="cache-info"><span id="cache-info">Downloaded models are kept in this browser so they load instantly next time.</span> <button id="btn-clear-cache" class="btn btn-ghost btn-sm" hidden>Clear cached models</button></p>
+        <h3 id="styles-help">Overlay styles</h3>
+        <p>The <b>Overlay</b> menu (or <kbd>S</kbd>, or saying a style's name with voice control) picks how your pose is drawn. Styles only change the picture: the recording and every dashboard metric are the same whichever you use, and the dashboard replay is drawn in the style you have chosen. With several people (or dancers online) everyone gets their own colours. The pencil, animator and origami-pleats styles fit a shaped human body to the tracked joints, with curved limbs, a torso and a head, and smooth the motion so it flows; the others draw the joints directly. With the camera feed hidden (<kbd>V</kbd>) the drawn styles show their own paper or studio background. Click a style below to use it.</p>
+        <div id="style-gallery" class="style-gallery" role="list"></div>
       </details>
       <p class="hint">Step back so your whole body is in the frame. Press <kbd>Space</kbd> to start or stop a recording, <kbd>F</kbd> for fullscreen, <kbd>O</kbd> to show or hide the pose overlay, <kbd>V</kbd> to show or hide the camera feed, <kbd>S</kbd> for the next overlay style, <kbd>M</kbd> for voice control (then say “help”).</p>
     </section>

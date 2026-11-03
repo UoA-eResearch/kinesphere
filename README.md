@@ -33,6 +33,9 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    skeleton, a cartoon stick figure, a neon glow, light trails that follow the hands and feet,
    sparks that fly off fast-moving joints, a constellation, **Sandman**, **Fuzzy blur**,
    **Origami**, **Origami pleats**, **Pencil sketch**, **Animator sketch** or **Hoops**.
+   The **?** help panel has an *Overlay styles* gallery: every style with a small preview drawn
+   by the style itself, how it looks, how it reacts to movement, its settings and the voice
+   command that selects it; click a card to switch to that style.
    The pencil, animator and origami-pleats styles draw a fitted human body rather than lines
    between joints (`js/body-model.js`): each arm and leg is a tube along a smooth curve through
    its joints, from the shoulder to the fingertips and the hip to the toes, with an anatomical

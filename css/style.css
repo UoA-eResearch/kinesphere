@@ -226,7 +226,7 @@ select, input[type="text"] {
 .hint { text-align: center; color: var(--muted); font-size: 0.88rem; }
 .setting-help { text-align: center; color: var(--ink-2); font-size: 0.85rem; max-width: 70ch; margin: -0.25rem auto 0; min-height: 1.2em; }
 .help-panel { max-width: 72ch; margin: 0 auto; font-size: 0.9rem; color: var(--ink-2); }
-.help-panel[open] { max-width: none; }
+.help-panel[open] { max-width: none; width: 100%; box-sizing: border-box; }
 .help-panel[open] dl, .help-panel[open] .fine, .help-panel[open] .cache-info { max-width: 80ch; margin-left: auto; margin-right: auto; }
 .help-panel h3.first { margin-top: 0.5rem; text-align: center; }
 .help-panel summary { cursor: pointer; color: var(--accent); text-align: center; }
@@ -515,3 +515,18 @@ select, input[type="text"] {
 .join-box { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; color: #dfe3ea; font-size: 0.9rem; }
 .join-box[hidden] { display: none; }
 .join-box input { font: inherit; padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.08); color: #fff; text-align: center; width: min(16rem, 80vw); }
+
+/* Overlay style gallery in the help panel */
+.style-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.8rem; margin: 0.6rem 0 0.4rem; }
+.style-card { display: flex; flex-direction: column; gap: 0.35rem; text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 0.55rem; }
+.style-card:hover, .style-card:focus-visible { border-color: var(--accent); }
+.style-card.is-current { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.style-card canvas { width: 100%; aspect-ratio: 4 / 3; border-radius: 8px; background: #111; display: block; }
+.style-card h4 { margin: 0.1rem 0 0; font-size: 0.95rem; display: flex; justify-content: space-between; gap: 0.4rem; align-items: baseline; }
+.style-card h4 small { font-weight: 500; color: var(--accent); font-size: 0.75rem; }
+.style-card p { margin: 0; font-size: 0.82rem; color: var(--ink-2); }
+.style-card p b { color: var(--ink); font-weight: 600; }
+.style-card .style-voice { color: var(--muted); font-size: 0.78rem; }
+.help-panel { min-width: 0; max-width: min(72ch, 100%); overflow-wrap: anywhere; contain: inline-size; } /* wide tables scroll inside it instead of widening the page */
+.help-panel .table-scroll { max-width: 100%; overflow-x: auto; }

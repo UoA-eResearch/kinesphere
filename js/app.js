@@ -439,6 +439,7 @@ function setStyle(id) {
   ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.styleId)?.label ?? state.styleId}`;
   rebuildEffects();
   ui.sandControls.hidden = state.styleId !== 'sandman';
+  if (ui.helpPanel?.open) renderStyleGallery();
   if (!state.showOverlay) setOverlay(true);
 }
 
@@ -1817,6 +1818,67 @@ ui.views.sessions.addEventListener('click', async e => {
 });
 
 // ---------------------------------------------------------------------------------------
+// Help: a gallery of the overlay styles, each with a small preview drawn by the style itself.
+
+/** A short demo dance (normalised landmarks, MoveNet's 17 points): one arm sweeps, a leg kicks. */
+function demoPose(t) {
+  const lm = new Float32Array(132);
+  const set = (k, x, y) => { lm[k * 4] = x; lm[k * 4 + 1] = y; lm[k * 4 + 3] = 0.95; };
+  const sway = 0.015 * Math.sin(t * 2.2);
+  set(0, 0.5 + sway, 0.2); set(2, 0.51 + sway, 0.19); set(5, 0.49 + sway, 0.19); set(7, 0.53 + sway, 0.2); set(8, 0.47 + sway, 0.2);
+  set(11, 0.57, 0.31); set(12, 0.43, 0.31); set(23, 0.55, 0.55); set(24, 0.45, 0.55);
+  set(13, 0.62, 0.43); set(15, 0.6, 0.53);
+  const a = Math.PI * (0.25 + 1.3 * (0.5 - 0.5 * Math.cos(t * 2.4)));
+  set(14, 0.43 - 0.1 * Math.sin(a), 0.31 + 0.14 * Math.cos(a)); set(16, 0.43 - 0.2 * Math.sin(a), 0.31 + 0.28 * Math.cos(a));
+  const k = 0.5 - 0.5 * Math.cos(t * 3);
+  set(25, 0.57 + 0.07 * k, 0.71 - 0.04 * k); set(27, 0.58 + 0.17 * k, 0.88 - 0.15 * k);
+  set(26, 0.45, 0.72); set(28, 0.45, 0.89);
+  return lm;
+}
+
+let styleGalleryDrawn = false;
+function renderStyleGallery() {
+  const host = $('#style-gallery');
+  if (!host) return;
+  if (!styleGalleryDrawn) {
+    host.innerHTML = STYLES.map(st => `
+      <button class="style-card" role="listitem" data-style="${st.id}" aria-label="Use the ${escapeHtml(st.label)} style">
+        <canvas width="320" height="240" aria-hidden="true"></canvas>
+        <h4>${escapeHtml(st.label)}<small hidden>in use</small></h4>
+        <p><b>Looks:</b> ${escapeHtml(st.look ?? '')}</p>
+        <p><b>Moves:</b> ${escapeHtml(st.moves ?? '')}</p>
+        ${st.settings ? `<p><b>Settings:</b> ${escapeHtml(st.settings)}</p>` : ''}
+        <p class="style-voice">Say “${escapeHtml(st.voice ?? st.label.toLowerCase())}”</p>
+      </button>`).join('');
+    host.querySelectorAll('.style-card').forEach(card => card.addEventListener('click', () => {
+      setStyle(card.dataset.style);
+      toast(`Style: ${STYLES.find(st => st.id === card.dataset.style)?.label}`);
+    }));
+    // draw each preview by running the style over a second of the demo dance (so trails, sparks and
+    // smears show), one style per animation frame so opening the help never stalls the page
+    const cards = [...host.querySelectorAll('.style-card')];
+    const drawNext = i => {
+      if (i >= cards.length) return;
+      const canvas = cards[i].querySelector('canvas'), ctx = canvas.getContext('2d');
+      const effect = createEffect(cards[i].dataset.style);
+      for (let f = 0; f <= 36; f++) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        effect.draw(ctx, demoPose(0.9 + f / 30), 0, canvas.width, canvas.height, 1 / 30, { person: 0, minVis: 0.5, videoVisible: false });
+      }
+      requestAnimationFrame(() => drawNext(i + 1));
+    };
+    requestAnimationFrame(() => drawNext(0));
+    styleGalleryDrawn = true;
+  }
+  host.querySelectorAll('.style-card').forEach(card => {
+    const current = card.dataset.style === state.styleId;
+    card.classList.toggle('is-current', current);
+    card.querySelector('small').hidden = !current;
+    card.setAttribute('aria-pressed', String(current));
+  });
+}
+
+// ---------------------------------------------------------------------------------------
 // Dance together online: share a link; everyone sees everyone's avatar (see multiplayer.js).
 
 const mp = createSession({ onPeers: onMpPeers, onPose: onMpPose, onStatus: onMpStatus });
@@ -2296,7 +2358,7 @@ function init() {
   });
   ui.helpPanel.addEventListener('toggle', () => {
     ui.btnHelp.setAttribute('aria-expanded', String(ui.helpPanel.open));
-    if (ui.helpPanel.open) refreshCacheInfo();
+    if (ui.helpPanel.open) { refreshCacheInfo(); renderStyleGallery(); }
   });
   ui.btnClearCache.addEventListener('click', async () => {
     await clearModelCache();
