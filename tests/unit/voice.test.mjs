@@ -27,6 +27,9 @@ const cases = [
   ['play sunrise', 'game:play:sunrise'], ['play neon nights', 'game:play:neon'], ['play the hard song', 'game:play:rush'], ['play a game', 'nav:game'],
   ['stop the song', 'game:stop'], ['louder', 'game:volume:0.15'], ['quieter', 'game:volume:-0.15'], ['mute', 'game:volume:0'],
   ['help', 'help:show'], ['what can I say', 'help:show'], ['close', 'help:hide'], ['stop listening', 'voice:off'],
+  ['more bend', 'bend:{"strength":0.5,"relative":true}'], ['less bend', 'bend:{"strength":-0.5,"relative":true}'], ['make it wobblier', 'bend:{"strength":0.5,"relative":true}'],
+  ['bend off', 'bend:{"strength":0}'], ['stiff', 'bend:{"strength":0}'], ['bend two', 'bend:{"strength":2}'], ['bend 1.5', 'bend:{"strength":1.5}'], ['rubbery', 'bend:{"strength":2}'],
+  ['normal bend', 'bend:reset'], ['reset bend', 'bend:reset'],
   ['invite', 'mp:invite'], ['leave the session', 'mp:leave'],
 ];
 for (const [phrase, want] of cases) test(`"${phrase}" → ${want}`, () => assert.equal(show(parseCommand(phrase)), want));

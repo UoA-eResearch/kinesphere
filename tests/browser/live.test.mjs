@@ -48,6 +48,54 @@ describe('overlay styles on the live camera', () => {
   });
 });
 
+describe('soft body (body bend slider)', () => {
+  const bend = () => app.page.evaluate(async () => (await import('/js/effects.js')).deformSettings.strength);
+  test('appears for the fitted-body styles only', async () => {
+    const { page } = app;
+    for (const [style, shown] of [['animator', true], ['pencil', true], ['pleats', true], ['neon', false], ['sandman', false]]) {
+      await page.selectOption('#sel-style', style);
+      assert.equal(await page.isVisible('#bend-controls'), shown, style);
+    }
+  });
+  test('the slider sets the strength, is remembered, and resets', async () => {
+    const { page } = app;
+    await page.selectOption('#sel-style', 'animator');
+    await page.$eval('#bend-strength', el => { el.value = '2.5'; el.dispatchEvent(new Event('input')); });
+    assert.equal(await bend(), 2.5);
+    assert.equal(await page.textContent('#bend-strength-val'), '2.5×');
+    assert.equal(await page.evaluate(() => localStorage.getItem('kinesphere:bend')), '2.5');
+    await page.click('#bend-reset');
+    assert.equal(await bend(), 1);
+    assert.equal(await page.evaluate(() => localStorage.getItem('kinesphere:bend')), null);
+  });
+  test('changes how far a swinging limb bends', async () => {
+    const lag = await app.page.evaluate(async () => {
+      const { createRig, buildBody, createDeformer } = await import('/js/body-model.js');
+      const { deformSettings, setDeformStrength } = await import('/js/effects.js');
+      const out = {};
+      for (const k of [0, 1, 3]) {
+        setDeformStrength(k);
+        // what the animator style does each frame, with its own base strength of 1.25
+        const d = createDeformer(); let info;
+        for (let i = 0; i < 72; i++) {
+          const a = i < 60 ? 0 : (i - 60) * 0.25;
+          const x = new Float32Array(33).fill(NaN), y = new Float32Array(33).fill(NaN), v = new Float32Array(33);
+          const set = (j, px, py) => { x[j] = px * 1280; y[j] = py * 720; v[j] = 0.9; };
+          set(0, 0.5, 0.2); set(11, 0.56, 0.3); set(12, 0.44, 0.3); set(23, 0.545, 0.53); set(24, 0.455, 0.53);
+          set(13, 0.62, 0.42); set(15, 0.64, 0.52); set(25, 0.55, 0.7); set(27, 0.55, 0.86); set(26, 0.45, 0.7); set(28, 0.45, 0.86);
+          set(14, 0.38, 0.42); set(16, 0.38 - 0.1 * Math.sin(a), 0.42 + 0.1 * Math.cos(a));
+          info = d.apply(buildBody({ x, y, v }, { samples: 12 }), 1 / 60, 1.25 * deformSettings.strength);
+        }
+        out[k] = info.limbs[1].lag;
+      }
+      setDeformStrength(1);
+      return out;
+    });
+    assert.ok(lag[0] < 0.005, `bend 0: lag ${lag[0]}`);
+    assert.ok(lag[3] > lag[1] * 2, `bend 3 (${lag[3]}) vs 1 (${lag[1]})`);
+  });
+});
+
 describe('"Body partially out of frame" hint', () => {
   test('appears when the hips and legs leave the picture, and goes when they return', async () => {
     const { page } = app;
@@ -116,6 +164,16 @@ describe('voice control', () => {
     const before = await page.$eval('#sel-style', s => s.value);
     await say('next stile', 'next style');
     assert.notEqual(await page.$eval('#sel-style', s => s.value), before);
+  });
+  test('"more bend" and "bend off" set the soft-body strength', async () => {
+    const { page } = app;
+    await say('more bend');
+    assert.ok(await page.isVisible('#bend-controls'), 'switches to a fitted-body style');
+    assert.equal(await page.$eval('#bend-strength', s => s.value), '1.5');
+    await say('bend off');
+    assert.equal(await page.$eval('#bend-strength', s => s.value), '0');
+    await say('normal bend');
+    assert.equal(await page.$eval('#bend-strength', s => s.value), '1');
   });
   test('chatter is ignored', async () => {
     const { page } = app;

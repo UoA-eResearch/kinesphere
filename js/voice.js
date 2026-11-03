@@ -64,6 +64,7 @@ export function normalise(text) {
  *   voice:off, help:show, help:hide, record:start, stop (record or song, as context decides),
  *   record:cancel, style (id | 'next' | 'previous'), overlay / video / mirror / view3d /
  *   fullscreen (true | false | null = toggle), smoothing (id), model (id), people (n),
+ *   bend ({ strength, relative } | 'reset'),
  *   sand ({ hue } | { gravity, relative } | { decay, relative } | { momentum, relative } | 'reset'),
  *   nav (live | game | sessions | dashboard), game:play (song id | null), game:volume (+-n | 0).
  */
@@ -122,6 +123,16 @@ export function parseCommand(text) {
     const n = /\d/.test(m[1]) ? Number(m[1]) : 1;
     if (n >= 1 && n <= 6) return { type: 'people', value: n };
   }
+  // soft-body deformation (pencil, animator, origami pleats)
+  if (/\b(bend|bendy|bendier|bending|wobble|wobbly|wobblier|squash|squishy|squishier|rubber|rubbery|stretchy|stretchier|deform|deformation|soft body|stiff|stiffer|rigid|floppy|floppier)\b/.test(t)) {
+    if (/^reset\b|\b(normal|default)\b/.test(t)) return { type: 'bend', value: 'reset' };
+    if ((m = t.match(/(\d+(\.\d+)?)/))) return { type: 'bend', value: { strength: Number(m[1]) } };
+    if (/\b(off|zero|none|no|rigid)\b|^stiff$/.test(t)) return { type: 'bend', value: { strength: 0 } };
+    if (/\b(less|down|lower|weaker|decrease|stiffer|reduce)\b/.test(t)) return { type: 'bend', value: { strength: -0.5, relative: true } };
+    if (/\b(more|up|higher|stronger|increase|extra|bendier|wobblier|squishier|stretchier|floppier|max|maximum)\b/.test(t)) return { type: 'bend', value: { strength: 0.5, relative: true } };
+    if (/\b(rubber|rubbery|floppy)\b/.test(t)) return { type: 'bend', value: { strength: 2 } };
+    if (/\b(on)\b/.test(t)) return { type: 'bend', value: 'reset' };
+  }
   // sandman particles
   if (/^reset (the )?(sand|particles?|sliders?|settings)$/.test(t)) return { type: 'sand', value: 'reset' };
   const colour = Object.keys(COLOUR_HUES).find(c => new RegExp(`\\b${c}\\b`).test(t));
@@ -159,6 +170,7 @@ export function parseCommand(text) {
 export const VOICE_HELP = [
   ['Recording', [['“Start recording” / “Record”', 'start after a 3-second countdown'], ['“Stop” / “Finish”', 'stop and open the dashboard'], ['“Cancel”', 'cancel the countdown']]],
   ['Look', [['“Neon”, “Sandman”, “Pencil”, “Animator”, “Origami”, “Pleats”, “Hoops”…', 'switch overlay style'], ['“Next style”', 'the next style'], ['“Overlay off” / “Show overlay”', 'hide or show the pose'], ['“Hide video” / “Video on”', 'hide or show the camera feed'], ['“Fullscreen” / “Exit fullscreen”', ''], ['“Mirror off” / “Flip”', 'mirror view'], ['“3D view” / “Close 3D”', ''], ['“Smoothing off / normal / strong”', '']]],
+  ['Soft body (pencil, animator, pleats)', [['“More bend” / “Less bend”', 'how much the body bends with movement'], ['“Bend off” / “Bend 2” / “Rubbery”', 'rigid, a set amount, or a rubbery body'], ['“Normal bend”', 'the default']]],
   ['Sandman particles', [['“Blue sand”, “Colour pink”…', 'particle colour'], ['“Gravity up / down / off / 2”, “Float”', 'gravity'], ['“Longer trails” / “Decay 5 seconds”', 'decay time'], ['“More / less momentum”', 'momentum'], ['“Reset sand”', 'defaults']]],
   ['Tracking', [['“Two people”, “Just me”', 'how many people to track'], ['“Use MultiPose / Lite / Heavy / Holistic”', 'pose model']]],
   ['Game and pages', [['“Game”, “Sessions”, “Dashboard”, “Live”', 'go to a page'], ['“Play Sunrise / Neon / Rush”', 'start a song'], ['“Stop song”', 'back to the song list'], ['“Louder” / “Quieter” / “Mute”', 'music volume']]],

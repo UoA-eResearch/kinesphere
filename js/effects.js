@@ -53,16 +53,19 @@ export const STYLES = [
     moves: 'The facets re-shade as limbs change angle, as if lit from the upper left.' },
   { id: 'pencil', label: 'Pencil sketch', voice: 'pencil / sketch',
     look: 'A loose graphite drawing of a shaped body: curved limb outlines, a hatched torso and sketched elbows and knees. With the camera feed hidden it is drawn on paper.',
-    moves: 'The body is soft: limbs bend and stretch a little behind fast moves and the torso squashes and stretches, then everything settles. The lines redraw slightly about seven times a second, like hand-drawn animation.' },
+    moves: 'The body is soft: limbs bend and stretch a little behind fast moves and the torso squashes and stretches, then everything settles. The lines redraw slightly about seven times a second, like hand-drawn animation.',
+    settings: 'A Body bend slider appears under the controls when this style is selected: 0 keeps the body rigid, 1 is the default, up to 3 for a rubbery cartoon body. Say “more bend”, “less bend” or “bend off”.' },
   { id: 'hoops', label: 'Hoops (hula hoop)', voice: 'hoops / hula hoop',
     look: 'Rings around every limb, the torso and the neck, a halo, and a striped hula hoop round the waist.',
     moves: 'The hula hoop spins faster the more your hips move, tilts with your hips and swings on a spring behind quick moves.' },
   { id: 'animator', label: 'Animator sketch', voice: 'animator / chalk',
     look: 'A construction drawing of a shaped body, in the manner of hand-drawn character animation: a centre line, chest line and waist ellipse, a boxy head and a cast shadow. Dancers alternate graphite and white chalk; on toned paper when the camera feed is hidden.',
-    moves: 'The body deforms with the force of the movement, like a rubbery cartoon: a limb swung fast bends into a curve behind the hand or foot, stretches long and thin, and leaves faint echoes and speed lines; when you stop it overshoots and snaps back. The torso squashes and stretches as you speed up and stop. The lines redraw every eighth of a second.' },
+    moves: 'The body deforms with the force of the movement, like a rubbery cartoon: a limb swung fast bends into a curve behind the hand or foot, stretches long and thin, and leaves faint echoes and speed lines; when you stop it overshoots and snaps back. The torso squashes and stretches as you speed up and stop. The lines redraw every eighth of a second.',
+    settings: 'A Body bend slider appears under the controls when this style is selected: 0 keeps the body rigid, 1 is the default, up to 3 for a rubbery cartoon body. Say “more bend”, “less bend” or “bend off”.' },
   { id: 'pleats', label: 'Origami pleats', voice: 'pleats / folded paper',
     look: 'A dancer folded from cream paper: a pyramid head, a fan-pleated torso with sharp shoulder flaps, pointed sleeves and wide creased trousers. In a warm studio when the camera feed is hidden.',
-    moves: 'The paper flexes a little behind fast moves, the flaps at the waist swing behind your movement, and the facets re-shade as you move.' },
+    moves: 'The paper flexes a little behind fast moves, the flaps at the waist swing behind your movement, and the facets re-shade as you move.',
+    settings: 'A Body bend slider appears under the controls when this style is selected: 0 keeps the body rigid, 1 is the default, up to 3 for a rubbery cartoon body. Say “more bend”, “less bend” or “bend off”.' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -491,6 +494,19 @@ export function drawPersonBadge(ctx, lm, offset, w, h, person, { mirror = false,
 // ---- sandman: a body of sand that sheds grains, which fall, pile up on the floor and fade ----
 
 /** Live-adjustable sandman settings (shared by every sandman effect, read on every frame). */
+/**
+ * Soft-body deformation: how much the fitted bodies (pencil, animator, origami pleats) bend, stretch
+ * and squash with the force of the movement. A multiplier on each style's own strength.
+ */
+export const DEFORM_STYLES = ['pencil', 'animator', 'pleats'];
+export const DEFORM_DEFAULT = 1;
+export const DEFORM_RANGE = [0, 3];
+export const deformSettings = { strength: DEFORM_DEFAULT };
+export function setDeformStrength(v) {
+  if (Number.isFinite(v)) deformSettings.strength = Math.max(DEFORM_RANGE[0], Math.min(DEFORM_RANGE[1], v));
+  return deformSettings.strength;
+}
+
 export const SAND_DEFAULTS = { hue: 38, gravity: 1, decay: 2.5, momentum: 1 };
 export const sandSettings = { ...SAND_DEFAULTS };
 export function setSandSettings(patch) {
@@ -781,7 +797,7 @@ function pencilStyle() {
       const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
       const B = buildBody(J, { minVis, samples: 10 });
       if (!B) return;
-      deformer.apply(B, dt, 0.7); // the body bends a little with the force of the movement
+      deformer.apply(B, dt, 0.7 * deformSettings.strength); // the body bends a little with the force of the movement
       const { T } = B;
       const frame = Math.floor(clock / BOIL);
       const rnd = seeded(frame * 97 + person * 13 + 1);
@@ -1092,7 +1108,7 @@ function animatorStyle() {
       const B = buildBody(J, { minVis, samples: 12 });
       if (!B) return;
       const { T } = B;
-      const deform = deformer.apply(B, dt, 1.25); // a little exaggerated, as an animator would
+      const deform = deformer.apply(B, dt, 1.25 * deformSettings.strength); // a little exaggerated, as an animator would
       const chalk = person % 2 === 1; // dancers alternate graphite and white chalk
       const ink = chalk ? '248,244,236' : '40,33,28', under = chalk ? '30,24,20' : '255,255,255';
       const rnd = seeded(Math.floor(clock / BOIL) * 131 + person * 17 + 3);
@@ -1214,7 +1230,7 @@ function origamiPleatsStyle() {
       // the paper body: few samples per limb, so its outline is folded into straight-edged facets
       const B = buildBody(J, { minVis, samples: 4, limbScale: 1.15, legScale: 1.4, legFlare: 0.14 });
       if (!B) return;
-      deformer.apply(B, dt, 0.5); // paper bends a little with the force of the movement
+      deformer.apply(B, dt, 0.5 * deformSettings.strength); // paper bends a little with the force of the movement
       const paper = PAPERS[person % PAPERS.length];
       const { T, axis, outOf, shL, shR, hpL, hpR, shM, hpM } = B;
       const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];

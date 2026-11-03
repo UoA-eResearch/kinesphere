@@ -124,6 +124,12 @@
           <input type="range" id="sand-momentum" min="0" max="2" step="0.1" aria-label="Particle momentum"> <span id="sand-momentum-val" class="mono"></span></label>
         <button id="sand-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
       </div>
+      <div id="bend-controls" class="effect-controls" hidden>
+        <span class="effect-controls-title">Soft body</span>
+        <label class="select" title="How much the body bends, stretches and squashes with the force of the movement: 0 keeps it rigid, 1 is the default, 3 is a rubbery cartoon body">Body bend
+          <input type="range" id="bend-strength" min="0" max="3" step="0.1" aria-label="Soft body deformation strength"> <span id="bend-strength-val" class="mono"></span></label>
+        <button id="bend-reset" class="btn btn-ghost btn-sm" type="button">Reset</button>
+      </div>
       <section id="mp-panel" class="mp-panel" aria-label="Dance together online" hidden></section>
       <p id="setting-help" class="setting-help"></p>
       <details id="help-panel" class="help-panel">

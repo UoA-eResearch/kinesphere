@@ -10,7 +10,7 @@ import {
 import { analyze, KINESPHERE_CLASSES, LEVELS, MAJOR_NAMES, LEFT_SLOTS, RIGHT_SLOTS, UPPER_SLOTS, LOWER_SLOTS } from './analysis.js';
 import { lineChart, stackedBar, floorPlot, bodyFigure, sideFigure, upperLowerFigure, levelsFigure, dataTable, heatLegend, ordinalColors, hideTip } from './charts.js';
 import { fmtClock, fmtDuration, fmtPct, fmtBytes, fmtDate, escapeHtml, clamp, median } from './util.js';
-import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAND_DEFAULTS, sandSettings, setSandSettings } from './effects.js';
+import { STYLES, DEFAULT_STYLE, createEffect, personColors, drawPersonBadge, SAND_DEFAULTS, sandSettings, setSandSettings, DEFORM_STYLES, DEFORM_DEFAULT, deformSettings, setDeformStrength } from './effects.js';
 import { SMOOTHING_LEVELS, DEFAULT_SMOOTHING, createSmoother } from './smoothing.js';
 import { createViewer3D, xrSupport, estimateBodyScale, loadThree, DEFAULT_DEPTH } from './viewer3d.js';
 import { createGame } from './game.js';
@@ -37,6 +37,7 @@ const OVERLAY_METRICS_KEY = 'kinesphere:replayOverlay';
 const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
+const BEND_KEY = 'kinesphere:bend';
 const HELP_KEY = 'kinesphere:dashHelp';
 const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
 const NAME_KEY = 'kinesphere:name';
@@ -65,6 +66,7 @@ const ui = {
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
   btnMp: $('#btn-mp'), mpPanel: $('#mp-panel'), mpBadge: $('#mp-badge'), joinBox: $('#join-box'), joinName: $('#join-name'),
   btnVoice: $('#btn-voice'), btnVoiceHud: $('#btn-voice-hud'), voiceChip: $('#voice-chip'), voiceHelp: $('#voice-help'),
+  bendControls: $('#bend-controls'), bendStrength: $('#bend-strength'), bendStrengthVal: $('#bend-strength-val'), bendReset: $('#bend-reset'),
   sandControls: $('#sand-controls'), sandHue: $('#sand-hue'), sandGravity: $('#sand-gravity'), sandGravityVal: $('#sand-gravity-val'),
   sandDecay: $('#sand-decay'), sandDecayVal: $('#sand-decay-val'), sandMomentum: $('#sand-momentum'), sandMomentumVal: $('#sand-momentum-val'), sandReset: $('#sand-reset'),
   btnStyle: $('#btn-style'), selStyle: $('#sel-style'), btnVideo: $('#btn-video'), selSmooth: $('#sel-smooth'),
@@ -439,6 +441,7 @@ function setStyle(id) {
   ui.btnStyle.textContent = `Style: ${STYLES.find(st => st.id === state.styleId)?.label ?? state.styleId}`;
   rebuildEffects();
   ui.sandControls.hidden = state.styleId !== 'sandman';
+  ui.bendControls.hidden = !DEFORM_STYLES.includes(state.styleId);
   if (ui.helpPanel?.open) renderStyleGallery();
   if (!state.showOverlay) setOverlay(true);
 }
@@ -470,6 +473,21 @@ function initSandControls() {
   for (const el of [ui.sandHue, ui.sandGravity, ui.sandDecay, ui.sandMomentum]) el.addEventListener('input', update);
   ui.sandReset.addEventListener('click', () => { setSandSettings(SAND_DEFAULTS); localStorage.removeItem(SAND_KEY); syncSandUI(); });
   syncSandUI();
+}
+
+/** Soft-body deformation slider (pencil, animator, origami pleats): applied live and remembered. */
+function applyBend(v) {
+  setDeformStrength(v);
+  if (deformSettings.strength === DEFORM_DEFAULT) localStorage.removeItem(BEND_KEY);
+  else localStorage.setItem(BEND_KEY, String(deformSettings.strength));
+  ui.bendStrength.value = String(deformSettings.strength);
+  ui.bendStrengthVal.textContent = `${deformSettings.strength.toFixed(1)}×`;
+}
+function initBendControls() {
+  const saved = Number(localStorage.getItem(BEND_KEY));
+  applyBend(localStorage.getItem(BEND_KEY) !== null && Number.isFinite(saved) ? saved : DEFORM_DEFAULT);
+  ui.bendStrength.addEventListener('input', () => applyBend(Number(ui.bendStrength.value)));
+  ui.bendReset.addEventListener('click', () => applyBend(DEFORM_DEFAULT));
 }
 
 function nextStyle() {
@@ -2281,6 +2299,11 @@ function runVoiceCommand(cmd) {
       if ('decay' in v) return `Decay ${sandSettings.decay.toFixed(1)} s`;
       return `Momentum ${sandSettings.momentum.toFixed(1)}×`;
     }
+    case 'bend': {
+      if (!DEFORM_STYLES.includes(state.styleId)) setStyle('animator');
+      applyBend(v === 'reset' ? DEFORM_DEFAULT : v.relative ? deformSettings.strength + v.strength : v.strength);
+      return deformSettings.strength === 0 ? 'Body bend off' : `Body bend ${deformSettings.strength.toFixed(1)}×`;
+    }
     case 'style': {
       if (v === 'next') nextStyle();
       else if (v === 'previous') { const i = STYLES.findIndex(st => st.id === state.styleId); setStyle(STYLES[(i - 1 + STYLES.length) % STYLES.length].id); }
@@ -2382,6 +2405,7 @@ function init() {
   }));
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   initSandControls();
+  initBendControls();
   initVoice();
   initMultiplayer();
   ui.btnStyle.addEventListener('click', nextStyle);

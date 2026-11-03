@@ -49,7 +49,10 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    and head, so the body moves fluidly and briefly lost joints don't make it flicker. A soft-body deformer
    (also in `js/body-model.js`) then bends, stretches and squashes the fitted body according to
    how hard each part is accelerating (strongest in *Animator sketch*, gentler in *Pencil
-   sketch* and *Origami pleats*). *Origami* folds the body from paper: each limb is a kite
+   sketch* and *Origami pleats*). A **Body bend** slider under the controls (shown for those three
+   styles, and remembered) scales the deformation from 0, a rigid body, through 1, the default, to
+   3, a rubbery cartoon body; voice control can set it too (“more bend”, “less bend”, “bend off”,
+   “bend 2”, “rubbery”, “normal bend”). *Origami* folds the body from paper: each limb is a kite
    creased along the bone, with its two facets shaded by a light from the upper left, a
    four-facet torso and a faceted head, casting a soft shadow. *Pencil sketch* draws a loose
    graphite figure (doubled limb contours, sketched joints, a hatched torso) whose lines redraw
@@ -210,6 +213,7 @@ whether you were understood. Examples:
 | --- | --- |
 | “Start recording” / “Record”, “Stop”, “Cancel” | start after the 3-second countdown, stop (the dashboard opens), cancel the countdown |
 | “Neon”, “Sandman”, “Pencil”, “Animator”, “Origami”, “Pleats”, “Fuzzy blur”, “Hoops”, “Next style” | overlay style |
+| “More bend”, “Less bend”, “Bend off”, “Bend 2”, “Rubbery”, “Normal bend” | how much the pencil, animator and origami-pleats bodies bend with movement (switches to Animator sketch if another style is showing) |
 | “Overlay off”, “Hide video”, “Mirror off”, “Flip”, “3D view”, “Fullscreen”, “Smoothing strong” | display options |
 | “Blue sand”, “Gravity up / off / 2”, “Float”, “Longer trails”, “Decay 5 seconds”, “More momentum”, “Reset sand” | Sandman particles (switches to Sandman) |
 | “Two people”, “Just me”, “Use MultiPose / Lite / Heavy / Holistic” | tracking settings |
