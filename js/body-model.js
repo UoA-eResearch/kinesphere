@@ -264,3 +264,21 @@ export function tracePath(ctx, pts, close = false) {
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   if (close) ctx.closePath();
 }
+
+/**
+ * A ribbon of varying width along a smooth curve through `pts`: width(u) gives the half-width at
+ * u = 0 (first point) .. 1 (last point), by length along the curve. Returns { centre, a, b }.
+ */
+export function ribbon(pts, width, steps = 4) {
+  const c = smoothOpen(pts, steps);
+  const cum = [0];
+  for (let i = 1; i < c.length; i++) cum.push(cum[i - 1] + len(c[i - 1], c[i]));
+  const total = cum[cum.length - 1] || 1;
+  const a = [], b = [];
+  for (let i = 0; i < c.length; i++) {
+    const p = c[Math.max(0, i - 1)], q = c[Math.min(c.length - 1, i + 1)];
+    const n = perp(unit(p, q)), w = width(cum[i] / total);
+    a.push(add(c[i], n, w)); b.push(add(c[i], n, -w));
+  }
+  return { centre: c, a, b, length: total };
+}
