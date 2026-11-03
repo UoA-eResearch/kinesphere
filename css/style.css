@@ -528,5 +528,5 @@ select, input[type="text"] {
 .style-card p { margin: 0; font-size: 0.82rem; color: var(--ink-2); }
 .style-card p b { color: var(--ink); font-weight: 600; }
 .style-card .style-voice { color: var(--muted); font-size: 0.78rem; }
-.help-panel { min-width: 0; max-width: min(72ch, 100%); overflow-wrap: anywhere; contain: inline-size; } /* wide tables scroll inside it instead of widening the page */
+.help-panel { min-width: 0; width: 100%; box-sizing: border-box; max-width: min(72ch, 100%); overflow-wrap: break-word; contain: inline-size; } /* full width of its column (contain: inline-size would otherwise shrink it to nothing); wide tables scroll inside it instead of widening the page */
 .help-panel .table-scroll { max-width: 100%; overflow-x: auto; }
