@@ -44,7 +44,10 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    egg shape with a narrower jaw on a neck. It works from MoveNet's 17 keypoints (hands and feet
    are inferred from the forearm and shin) and uses MediaPipe's hand and foot points when it has
    them. A spring-damped rig smooths the joints, with a little follow-through at the hands, feet
-   and head, so the body moves fluidly and briefly lost joints don't make it flicker. *Origami* folds the body from paper: each limb is a kite
+   and head, so the body moves fluidly and briefly lost joints don't make it flicker. A soft-body deformer
+   (also in `js/body-model.js`) then bends, stretches and squashes the fitted body according to
+   how hard each part is accelerating (strongest in *Animator sketch*, gentler in *Pencil
+   sketch* and *Origami pleats*). *Origami* folds the body from paper: each limb is a kite
    creased along the bone, with its two facets shaded by a light from the upper left, a
    four-facet torso and a faceted head, casting a soft shadow. *Pencil sketch* draws a loose
    graphite figure (doubled limb contours, sketched joints, a hatched torso) whose lines redraw
@@ -59,11 +62,15 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    muscle, the torso carries a centre line, a chest line and a waist ellipse, shoulders get ovals,
    hands are mittens with a thumb and the head is a boxy sketch with an ear and a stroke of hair,
    all redrawn slightly every eighth of a second, with a soft shadow cast to one side. Fast moves
-   *smear*, as in hand-drawn animation: when a hand or foot moves faster than about 1.2 torso
-   lengths a second, the limb runs on from the wrist or ankle into a long, tapering, elastic
-   ribbon along the path it just travelled (up to 0.4 s of it at full speed), shaded inside,
-   outlined, streaked with speed lines and trailed by faint echoes of the limb; it stretches out
-   quickly and springs back over about a quarter of a second when the move ends. Jumps (scrubbing
+   *smear*, as in hand-drawn animation, by deforming the body itself with the force of the
+   movement: each arm and leg is a soft chain of point masses on springs that are stiff at the
+   shoulder or hip and loose towards the hand or foot, so when a limb is swung hard its outer
+   part lags behind and the whole limb bends into a curve, stretches long and thins (its width
+   shrinks as it stretches, keeping its volume), then overshoots slightly and snaps back over
+   about a quarter of a second when the move stops. The torso squashes and stretches along the
+   direction it accelerates, and the head and neck lag a little. The harder the move, the
+   stronger the deformation; faint echoes of the bent limb and speed lines along it mark the
+   fastest moments. Jumps (scrubbing
    a replay, a limb lost and found) don't count as movement. Dancers
    alternate between graphite and white chalk, and with the camera feed hidden they are drawn on
    warm toned paper. *Origami pleats* folds each dancer from cream paper shaded with amber in the

@@ -5,7 +5,7 @@
 // and keeps its own state (particles, trails) so it animates smoothly between detections.
 
 import { CONNECTIONS, NUM_LANDMARKS, STRIDE, drawSkeleton, drawHandSkeleton, drawFaceContours } from './pose.js';
-import { createRig, buildBody, smoothClosed, smoothOpen, tracePath, ribbon } from './body-model.js';
+import { createRig, buildBody, createDeformer, smoothClosed, smoothOpen, tracePath } from './body-model.js';
 
 /** Colour set per tracked person (slot). Person 1 keeps the classic orange/blue. */
 export const PERSON_COLORS = [
@@ -53,16 +53,16 @@ export const STYLES = [
     moves: 'The facets re-shade as limbs change angle, as if lit from the upper left.' },
   { id: 'pencil', label: 'Pencil sketch', voice: 'pencil / sketch',
     look: 'A loose graphite drawing of a shaped body: curved limb outlines, a hatched torso and sketched elbows and knees. With the camera feed hidden it is drawn on paper.',
-    moves: 'The lines redraw slightly about seven times a second, like hand-drawn animation, and the body flows with the movement.' },
+    moves: 'The body is soft: limbs bend and stretch a little behind fast moves and the torso squashes and stretches, then everything settles. The lines redraw slightly about seven times a second, like hand-drawn animation.' },
   { id: 'hoops', label: 'Hoops (hula hoop)', voice: 'hoops / hula hoop',
     look: 'Rings around every limb, the torso and the neck, a halo, and a striped hula hoop round the waist.',
     moves: 'The hula hoop spins faster the more your hips move, tilts with your hips and swings on a spring behind quick moves.' },
   { id: 'animator', label: 'Animator sketch', voice: 'animator / chalk',
     look: 'A construction drawing of a shaped body, in the manner of hand-drawn character animation: a centre line, chest line and waist ellipse, a boxy head and a cast shadow. Dancers alternate graphite and white chalk; on toned paper when the camera feed is hidden.',
-    moves: 'Fast moves smear: the limb stretches into a long, tapering ribbon along the path it just travelled, then springs back. The lines redraw every eighth of a second.' },
+    moves: 'The body deforms with the force of the movement, like a rubbery cartoon: a limb swung fast bends into a curve behind the hand or foot, stretches long and thin, and leaves faint echoes and speed lines; when you stop it overshoots and snaps back. The torso squashes and stretches as you speed up and stop. The lines redraw every eighth of a second.' },
   { id: 'pleats', label: 'Origami pleats', voice: 'pleats / folded paper',
     look: 'A dancer folded from cream paper: a pyramid head, a fan-pleated torso with sharp shoulder flaps, pointed sleeves and wide creased trousers. In a warm studio when the camera feed is hidden.',
-    moves: 'Paper flaps at the waist swing behind your movement, and the facets re-shade as you move.' },
+    moves: 'The paper flexes a little behind fast moves, the flaps at the waist swing behind your movement, and the facets re-shade as you move.' },
 ];
 export const DEFAULT_STYLE = 'skeleton';
 
@@ -770,16 +770,18 @@ function pencilStyle() {
   const BOIL = 0.14; // s between redraws of the wobble, like hand-drawn animation
   let clock = 0;
   const rig = createRig();
+  const deformer = createDeformer();
   return {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       clock += dt;
       // without a camera picture behind, draw on paper (once, by the first person's effect)
       if (!videoVisible && person === 0) ctx.drawImage(paperSheet(w, h), 0, 0);
-      if (!lm) { rig.reset(); return; }
+      if (!lm) { rig.reset(); deformer.reset(); return; }
       const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
       const B = buildBody(J, { minVis, samples: 10 });
       if (!B) return;
+      deformer.apply(B, dt, 0.7); // the body bends a little with the force of the movement
       const { T } = B;
       const frame = Math.floor(clock / BOIL);
       const rnd = seeded(frame * 97 + person * 13 + 1);
@@ -861,7 +863,7 @@ function pencilStyle() {
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
-    reset() { clock = 0; },
+    reset() { clock = 0; rig.reset(); deformer.reset(); },
   };
 }
 
@@ -1068,75 +1070,29 @@ function tonedSheet(w, h) {
   });
 }
 
-// Smears: when a hand or foot moves fast, the limb stretches into a long, tapering, elastic ribbon
-// that follows the path the hand or foot just travelled - the "smear" of hand-drawn animation -
-// shaded inside, outlined, streaked with speed lines, with faint echoes of the limb behind it.
-const SMEAR_HISTORY = 0.6;   // s of hand / foot positions kept
-const SMEAR_START = 1.2;     // torso lengths / s: slower movement draws no smear
-const SMEAR_FULL = 4.5;      // torso lengths / s: a full-length smear
-const SMEAR_MAX = 0.42;      // s of the path a full smear stretches back along
-const SMEAR_RELEASE = 0.28;  // s: how long a smear takes to spring back after the move
-
-function createSmears() {
-  // per limb (arm l, arm r, leg l, leg r): recent tip positions, current amount, echo outlines
-  const limbs = Array.from({ length: 4 }, () => ({ hist: [], amount: 0, echoes: [], lastEcho: 0 }));
-  return {
-    /** Record this frame's limbs; returns per limb { amount, trail: [points newest -> oldest] }. */
-    update(B, clock, dt) {
-      const list = [B.arms[0], B.arms[1], B.legs[0], B.legs[1]];
-      return list.map((L, k) => {
-        const st = limbs[k];
-        if (!L) { st.hist.length = 0; st.amount = 0; st.echoes.length = 0; return null; }
-        const tip = L.joints[3], wrist = L.joints[2];
-        const last = st.hist[st.hist.length - 1];
-        // a jump (scrubbing a replay, a lost-and-found limb) is not movement: start afresh
-        if (last && (dt > 0.12 || Math.hypot(tip[0] - last.tip[0], tip[1] - last.tip[1]) > B.T * 1.2)) { st.hist.length = 0; st.echoes.length = 0; st.amount = 0; }
-        st.hist.push({ t: clock, tip, wrist });
-        while (st.hist.length && clock - st.hist[0].t > SMEAR_HISTORY) st.hist.shift();
-        // speed of the tip over the last ~80 ms, in torso lengths per second
-        let speed = 0;
-        for (let i = st.hist.length - 2; i >= 0; i--) {
-          if (clock - st.hist[i].t >= 0.08 || i === 0) {
-            const h0 = st.hist[i], span = clock - h0.t;
-            if (span > 0.01) speed = Math.hypot(tip[0] - h0.tip[0], tip[1] - h0.tip[1]) / span / B.T;
-            break;
-          }
-        }
-        const target = Math.max(0, Math.min(1, (speed - SMEAR_START) / (SMEAR_FULL - SMEAR_START)));
-        const rate = target > st.amount ? 1 - Math.exp(-dt / 0.04) : 1 - Math.exp(-dt / SMEAR_RELEASE);
-        st.amount += (target - st.amount) * rate;
-        // echoes: a copy of the limb outline every ~50 ms while it moves fast, kept for ~0.2 s
-        if (st.amount > 0.25 && clock - st.lastEcho > 0.05) { st.echoes.push({ t: clock, outline: L.outline.slice() }); st.lastEcho = clock; }
-        while (st.echoes.length && clock - st.echoes[0].t > 0.2) st.echoes.shift();
-        // the trail: the tip's path back over a time that grows with the smear
-        const back = SMEAR_MAX * st.amount, trail = [];
-        for (let i = st.hist.length - 2; i >= 0; i--) {
-          if (clock - st.hist[i].t > back) break;
-          trail.push(st.hist[i].tip);
-        }
-        return { amount: st.amount, trail, echoes: st.echoes, clock };
-      });
-    },
-    reset() { for (const st of limbs) { st.hist.length = 0; st.amount = 0; st.echoes.length = 0; } },
-  };
-}
+// Smears: the body deforms with the force of the movement (see createDeformer in body-model.js).
+// A fast swing leaves the outer limb behind so it bends and stretches like soft rubber, a sudden
+// stop makes it overshoot and snap back, and the torso squashes and stretches. The sketch adds a
+// smudge of tone, speed lines and faint echoes wherever a limb is bent out of shape.
+const ECHO_LIFE = 0.2; // s an echo of a deformed limb stays visible
 
 function animatorStyle() {
   const BOIL = 0.12; // s between redraws, like drawn-on-twos animation
   let clock = 0;
   const rig = createRig();
-  const smears = createSmears();
+  const deformer = createDeformer();
+  const echoes = [[], [], [], []], lastEcho = [0, 0, 0, 0];
   return {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       clock += dt;
       if (!videoVisible && person === 0) ctx.drawImage(tonedSheet(w, h), 0, 0);
-      if (!lm) { rig.reset(); smears.reset(); return; }
+      if (!lm) { rig.reset(); deformer.reset(); return; }
       const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
       const B = buildBody(J, { minVis, samples: 12 });
       if (!B) return;
       const { T } = B;
-      const smear = smears.update(B, clock, dt);
+      const deform = deformer.apply(B, dt, 1.25); // a little exaggerated, as an animator would
       const chalk = person % 2 === 1; // dancers alternate graphite and white chalk
       const ink = chalk ? '248,244,236' : '40,33,28', under = chalk ? '30,24,20' : '255,255,255';
       const rnd = seeded(Math.floor(clock / BOIL) * 131 + person * 17 + 3);
@@ -1169,34 +1125,25 @@ function animatorStyle() {
         const o = L.outer === 'a' ? L.outline : L.outline.slice().reverse();
         stroke(o.slice(skipOuter, o.length - skipInner), { passes: 2 });
       };
-      // a smear: the limb runs on from the wrist / ankle into a ribbon along the path it just
-      // travelled, thinning to a point; shaded inside, outlined, with speed lines along it
-      const drawSmear = (L, sm, baseW) => {
-        if (!L || !sm || sm.amount < 0.04 || sm.trail.length < 2) return;
-        const amt = sm.amount;
-        for (const e of sm.echoes) { // faint echoes of where the limb just was
-          const age = (sm.clock - e.t) / 0.2;
-          stroke(e.outline, { alpha: 0.28 * (1 - age) * amt, width: lw * 0.7, close: true, wob: T * 0.02 });
-        }
-        const pts = [L.joints[2], L.joints[3], ...sm.trail];
-        const w0 = baseW * T;
-        const rb = ribbon(pts, u => Math.max(T * 0.004, w0 * (1 + 0.25 * Math.sin(Math.min(1, u * 3) * Math.PI)) * Math.pow(1 - u, 0.85)), 3);
-        // smudge: the ribbon filled with a faint tone, darker near the limb
-        const g = ctx.createLinearGradient(rb.centre[0][0], rb.centre[0][1], rb.centre[rb.centre.length - 1][0], rb.centre[rb.centre.length - 1][1]);
-        g.addColorStop(0, `rgba(${ink},${(0.32 * amt).toFixed(3)})`); g.addColorStop(1, `rgba(${ink},0)`);
+      // where a limb is bent out of shape by a fast move: a smudge of tone inside it, speed lines
+      // along it, and faint echoes of where it just was
+      const smearCues = (L, k) => {
+        const info = deform.limbs[k];
+        if (!L || !info) { echoes[k].length = 0; return; }
+        const amt = Math.max(0, Math.min(1, (info.lag - 0.08) / 0.5 + (info.stretch - 1) * 1.5));
+        if (amt > 0.3 && clock - lastEcho[k] > 0.05) { echoes[k].push({ t: clock, outline: L.outline.slice() }); lastEcho[k] = clock; }
+        while (echoes[k].length && clock - echoes[k][0].t > ECHO_LIFE) echoes[k].shift();
+        for (const e of echoes[k]) stroke(e.outline, { alpha: 0.25 * (1 - (clock - e.t) / ECHO_LIFE), width: lw * 0.7, close: true, wob: T * 0.02 });
+        if (amt < 0.05) return;
+        const n = L.centre.length, tip = L.centre[n - 1], root = L.centre[Math.floor(n * 0.3)];
+        const g = ctx.createLinearGradient(root[0], root[1], tip[0], tip[1]);
+        g.addColorStop(0, `rgba(${ink},0)`); g.addColorStop(1, `rgba(${ink},${(0.3 * amt).toFixed(3)})`);
         ctx.fillStyle = g;
-        tracePath(ctx, [...rb.a, ...rb.b.slice().reverse()], true);
+        tracePath(ctx, L.outline, true);
         ctx.fill();
-        // contours, fading towards the tail
-        const n = rb.a.length, cut = Math.max(2, Math.round(n * (0.55 + 0.4 * amt)));
-        stroke(rb.a.slice(0, cut), { alpha: 0.85 * amt + 0.1, wob: T * 0.008 });
-        stroke(rb.b.slice(0, cut), { alpha: 0.85 * amt + 0.1, wob: T * 0.008 });
-        stroke(rb.a.slice(cut - 1), { alpha: 0.35 * amt, width: lw * 0.7, wob: T * 0.008 });
-        stroke(rb.b.slice(cut - 1), { alpha: 0.35 * amt, width: lw * 0.7, wob: T * 0.008 });
-        // speed lines inside the smear, a little offset from the centre
-        for (const [f, al] of [[0.35, 0.4], [-0.3, 0.3], [0.05, 0.22]]) {
-          const line = rb.centre.map((c, i) => [c[0] + (rb.a[i][0] - c[0]) * f, c[1] + (rb.a[i][1] - c[1]) * f]);
-          stroke(line.slice(Math.floor(n * 0.08), Math.floor(n * (0.7 + 0.25 * amt))), { alpha: al * amt, width: lw * 0.6, wob: T * 0.01 });
+        for (const [f, al] of [[0.45, 0.45], [-0.4, 0.35], [0.1, 0.25]]) {
+          const line = L.centre.map((c, i) => [c[0] + (L.a[i][0] - c[0]) * f, c[1] + (L.a[i][1] - c[1]) * f]);
+          stroke(line.slice(Math.floor(n * 0.35), n - 2), { alpha: al * amt, width: lw * 0.6, wob: T * 0.008 });
         }
       };
       // soft cast shadow on the floor, falling to one side as under a low light
@@ -1206,7 +1153,7 @@ function animatorStyle() {
         const fy = low + T * 0.06, fx = planted.reduce((a, f) => a + f[0], 0) / planted.length;
         softEllipse(ctx, fx + T * 0.55, fy, T * 0.85, T * 0.09, '60,45,32', 0.32);
       }
-      drawSmear(B.legs[0], smear[2], 0.06); drawSmear(B.legs[1], smear[3], 0.06);
+      smearCues(B.legs[0], 2); smearCues(B.legs[1], 3);
       limbLine(B.legs[0], 2, 4); limbLine(B.legs[1], 2, 4);
       // torso silhouette from one hip, over the shoulders, to the other (the legs close the bottom)
       const t = B.torso, kn = 6;
@@ -1218,7 +1165,7 @@ function animatorStyle() {
       for (let i = 0; i <= 16; i++) { const a = 0.08 + (Math.PI - 0.16) * i / 16; ell.push([wv.centre[0] + Math.cos(a) * wv.rx * Math.cos(wv.rot) - Math.sin(a) * wv.ry * Math.sin(wv.rot), wv.centre[1] + Math.cos(a) * wv.rx * Math.sin(wv.rot) + Math.sin(a) * wv.ry * Math.cos(wv.rot)]); }
       stroke(ell, { alpha: 0.6, width: lw * 0.85, passes: 2 });
       // arms: the outer line runs on from the shoulder cap; the inner line starts at the armpit
-      drawSmear(B.arms[0], smear[0], 0.055); drawSmear(B.arms[1], smear[1], 0.055);
+      smearCues(B.arms[0], 0); smearCues(B.arms[1], 1);
       limbLine(B.arms[0], 0, 4); limbLine(B.arms[1], 0, 4);
       for (const L of B.arms) { // a thumb on each mitten hand
         if (!L) continue;
@@ -1239,7 +1186,7 @@ function animatorStyle() {
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
-    reset() { clock = 0; rig.reset(); smears.reset(); },
+    reset() { clock = 0; rig.reset(); deformer.reset(); for (const e of echoes) e.length = 0; },
   };
 }
 
@@ -1250,6 +1197,7 @@ function origamiPleatsStyle() {
   const LIGHT = [-0.6, -0.8]; // from the upper left
   let flap = [0, 0], flapV = [0, 0], lastHip = null;
   const rig = createRig();
+  const deformer = createDeformer();
   const PAPERS = ['#f3e9d4', '#f4e2bc', '#efe5dd', '#eee8cf', '#f6dfc4', '#e9e6d8'];
   const AMBER = [214, 158, 76];
   const tint = (hex, f) => { // f: 1 = facing the light (paper), 0 = in shadow (amber)
@@ -1261,11 +1209,12 @@ function origamiPleatsStyle() {
     draw(ctx, lm, offset, w, h, dt, opts = {}) {
       const { mirror = false, minVis = 0.5, person = 0, videoVisible = true } = opts;
       if (!videoVisible && person === 0) ctx.drawImage(studioBackdrop(w, h), 0, 0);
-      if (!lm) { lastHip = null; rig.reset(); return; }
+      if (!lm) { lastHip = null; rig.reset(); deformer.reset(); return; }
       const J = rig.update(project(lm, offset, w, h, mirror), dt, minVis);
       // the paper body: few samples per limb, so its outline is folded into straight-edged facets
       const B = buildBody(J, { minVis, samples: 4, limbScale: 1.15, legScale: 1.4, legFlare: 0.14 });
       if (!B) return;
+      deformer.apply(B, dt, 0.5); // paper bends a little with the force of the movement
       const paper = PAPERS[person % PAPERS.length];
       const { T, axis, outOf, shL, shR, hpL, hpR, shM, hpM } = B;
       const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k];
@@ -1367,7 +1316,7 @@ function origamiPleatsStyle() {
       ctx.restore();
       drawExtras(ctx, w, h, opts, 'ghost');
     },
-    reset() { flap = [0, 0]; flapV = [0, 0]; lastHip = null; rig.reset(); },
+    reset() { flap = [0, 0]; flapV = [0, 0]; lastHip = null; rig.reset(); deformer.reset(); },
   };
 }
 const clamp01 = v => Math.max(0, Math.min(1, v));

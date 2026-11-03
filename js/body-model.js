@@ -282,3 +282,114 @@ export function ribbon(pts, width, steps = 4) {
   }
   return { centre: c, a, b, length: total };
 }
+
+/**
+ * Soft-body deformation: the body bends, stretches and squashes with the force of the movement,
+ * like the smears and follow-through of hand-drawn animation.
+ *
+ * Every sample along each limb's centreline is a mass on a spring pulled towards where the skeleton
+ * puts it: stiff at the shoulder or hip, looser towards the hand or foot, slightly underdamped. A
+ * fast move leaves the outer part of the limb behind, so the limb curves and stretches (thinning
+ * to keep its volume); a sudden stop makes it overshoot and snap back. The torso squashes and
+ * stretches along the body's own motion and the head lags a touch behind it.
+ *
+ *   const deform = createDeformer();
+ *   const info = deform.apply(B, dt, strength);   // B from buildBody(); modified in place
+ *   // info.limbs[k] = { lag, stretch } per limb (arm l, arm r, leg l, leg r), lag in torso lengths
+ */
+export function createDeformer() {
+  const limbs = [null, null, null, null];
+  const body = { pos: null, vel: [0, 0] };
+  const OMEGA_ROOT = 2 * Math.PI * 7, OMEGA_TIP = 2 * Math.PI * 1.6, ZETA = 0.45, SUB = 1 / 240;
+
+  function deformLimb(L, k, dt, strength, T) {
+    if (!L) { limbs[k] = null; return null; }
+    const n = L.centre.length, tgt = L.centre;
+    let st = limbs[k];
+    const jump = st && (st.n !== n || dt > 0.15 || len(st.root, tgt[0]) > T * 1.2);
+    if (!st || jump) {
+      st = limbs[k] = { n, x: tgt.map(p => p[0]), y: tgt.map(p => p[1]), vx: new Float32Array(n), vy: new Float32Array(n), root: tgt[0] };
+    }
+    st.root = tgt[0];
+    const h = Math.min(Math.max(dt, 0), 0.05), steps = Math.max(1, Math.ceil(h / SUB)), d = h / steps;
+    const maxLag = T * 1.6;
+    for (let s = 0; s < steps; s++) {
+      for (let i = 1; i < n; i++) {
+        const u = Math.pow(i / (n - 1), 0.8), w = OMEGA_ROOT + (OMEGA_TIP - OMEGA_ROOT) * u;
+        st.vx[i] += (w * w * (tgt[i][0] - st.x[i]) - 2 * ZETA * w * st.vx[i]) * d;
+        st.vy[i] += (w * w * (tgt[i][1] - st.y[i]) - 2 * ZETA * w * st.vy[i]) * d;
+        st.x[i] += st.vx[i] * d; st.y[i] += st.vy[i] * d;
+      }
+    }
+    st.x[0] = tgt[0][0]; st.y[0] = tgt[0][1];
+    // the drawn limb: between where the skeleton is and where the springs have got to
+    const c = new Array(n);
+    for (let i = 0; i < n; i++) {
+      let dx = st.x[i] - tgt[i][0], dy = st.y[i] - tgt[i][1];
+      const l = Math.hypot(dx, dy);
+      if (l > maxLag) { dx *= maxLag / l; dy *= maxLag / l; st.x[i] = tgt[i][0] + dx; st.y[i] = tgt[i][1] + dy; }
+      c[i] = [tgt[i][0] + dx * strength, tgt[i][1] + dy * strength];
+    }
+    // rebuild the outline round the bent centreline, thinner where stretched, fuller where squashed
+    const a = [], b = [];
+    let restLen = 0, newLen = 0;
+    for (let i = 0; i < n; i++) {
+      const half = len(tgt[i], L.a[i]);
+      const p = Math.max(0, i - 1), q = Math.min(n - 1, i + 1);
+      const r = len(c[p], c[q]) / (len(tgt[p], tgt[q]) || 1);
+      const f = Math.max(0.45, Math.min(1.35, 1 / Math.sqrt(r || 1)));
+      const nrm = perp(unit(c[p], c[q]));
+      a.push(add(c[i], nrm, half * f)); b.push(add(c[i], nrm, -half * f));
+      if (i) { restLen += len(tgt[i - 1], tgt[i]); newLen += len(c[i - 1], c[i]); }
+    }
+    L.centre = c; L.a = a; L.b = b;
+    L.outline = tubeOutline(L);
+    const per = (n - 1) / 3; // joints sit at the segment ends
+    L.joints = [0, 1, 2, 3].map(j => c[Math.round(j * per)]);
+    return { lag: len(c[n - 1], tgt[n - 1]) / T, stretch: newLen / (restLen || 1) };
+  }
+
+  return {
+    apply(B, dt, strength = 1) {
+      if (!B) return null;
+      const { T } = B;
+      const info = { limbs: [B.arms[0], B.arms[1], B.legs[0], B.legs[1]].map((L, k) => deformLimb(L, k, dt, strength, T)), body: 0 };
+      // squash and stretch of the torso: a mass on a spring follows the torso's centre; how far it
+      // trails sets the direction and amount of stretch
+      const cen = mix(B.shM, B.hpM, 0.5);
+      if (!body.pos || dt > 0.15 || len(body.pos, cen) > T * 1.5) { body.pos = cen.slice(); body.vel = [0, 0]; }
+      const w = 2 * Math.PI * 2.5, z = 0.5, h = Math.min(Math.max(dt, 0), 0.05), steps = Math.max(1, Math.ceil(h / SUB)), d = h / steps;
+      for (let s = 0; s < steps; s++) for (let i = 0; i < 2; i++) {
+        body.vel[i] += (w * w * (cen[i] - body.pos[i]) - 2 * z * w * body.vel[i]) * d;
+        body.pos[i] += body.vel[i] * d;
+      }
+      const lag = [body.pos[0] - cen[0], body.pos[1] - cen[1]], amount = Math.min(0.35, (len([0, 0], lag) / T) * 1.2 * strength);
+      info.body = amount;
+      if (amount > 0.005) {
+        const u = unit([0, 0], lag), v = perp(u), sAlong = 1 + amount, sAcross = 1 / Math.sqrt(sAlong);
+        const warp = p => {
+          const dx = p[0] - cen[0], dy = p[1] - cen[1], pa = dx * u[0] + dy * u[1], pb = dx * v[0] + dy * v[1];
+          return [cen[0] + u[0] * pa * sAlong + v[0] * pb * sAcross, cen[1] + u[1] * pa * sAlong + v[1] * pb * sAcross];
+        };
+        B.torso = B.torso.map(warp);
+        B.torsoKnots = B.torsoKnots.map(warp);
+        B.chest = B.chest.map(warp);
+        B.crotch = warp(B.crotch);
+        B.waist = { ...B.waist, centre: warp(B.waist.centre) };
+      }
+      // the head trails the body a little, bending the neck
+      if (B.head) {
+        const off = [lag[0] * 0.5 * strength, lag[1] * 0.5 * strength];
+        B.head = { ...B.head, centre: add(B.head.centre, off), outline: B.head.outline.map(p => add(p, off)) };
+        if (B.neck) {
+          const m = B.neck.centre.length;
+          const shift = (p, i) => add(p, off, i / (m - 1));
+          B.neck = { ...B.neck, centre: B.neck.centre.map(shift), a: B.neck.a.map(shift), b: B.neck.b.map(shift) };
+          B.neck.outline = tubeOutline(B.neck);
+        }
+      }
+      return info;
+    },
+    reset() { limbs.fill(null); body.pos = null; },
+  };
+}
