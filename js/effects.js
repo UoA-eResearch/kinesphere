@@ -117,8 +117,11 @@ function drawExtras(ctx, w, h, opts, mode, hue = 0) {
   if (mode === 'glow') {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = hsla(hue, 100, 60);
+    // a faint wide pass under the line instead of shadowBlur (costly over hundreds of segments)
+    ctx.globalAlpha = 0.25;
+    drawHandSkeleton(ctx, hands, w, h, { mirror, minVis, lineWidth: thin * 5, radius: thin * 2.5, leftColor: hsla(hue + 70, 100, 60), rightColor: hsla(hue - 70, 100, 60) });
+    drawFaceContours(ctx, face, faceContours, w, h, { mirror, color: hsla(hue, 100, 60), lineWidth: thin * 3.5, alpha: 0.7 });
+    ctx.globalAlpha = 1;
     drawHandSkeleton(ctx, hands, w, h, { mirror, minVis, lineWidth: thin * 1.5, radius: thin, leftColor: hsla(hue + 70, 100, 70), rightColor: hsla(hue - 70, 100, 70) });
     drawFaceContours(ctx, face, faceContours, w, h, { mirror, color: hsla(hue, 100, 75), lineWidth: thin, alpha: 0.7 });
     ctx.restore();
@@ -218,14 +221,14 @@ function neonStyle() {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.globalCompositeOperation = 'lighter';
-      for (const [blur, width, alpha] of [[28, w / 70, 0.5], [12, w / 140, 0.8], [0, Math.max(1.5, w / 400), 1]]) {
-        ctx.shadowBlur = blur;
+      // the glow is layered wide, faint strokes added together: it looks like a blur but costs no
+      // shadowBlur (each blurred stroke is a separate, expensive blur on the GPU)
+      for (const [glow, width, alpha] of [[true, w / 38, 0.08], [true, w / 60, 0.14], [true, w / 100, 0.28], [true, w / 170, 0.6], [false, Math.max(1.5, w / 400), 1]]) {
         ctx.globalAlpha = alpha;
-        drawBones(ctx, p, minVis, bones, (a, b) => { const c = colorFor(a, b); ctx.shadowColor = c; return blur ? c : '#fff'; }, width);
+        drawBones(ctx, p, minVis, bones, (a, b) => (glow ? colorFor(a, b) : '#fff'), width);
         if (head) {
           const c = hsla(hue, 100, 60);
-          ctx.shadowColor = c;
-          ctx.strokeStyle = blur ? c : '#fff';
+          ctx.strokeStyle = glow ? c : '#fff';
           ctx.lineWidth = width;
           ctx.beginPath();
           ctx.arc(head.hx, head.hy, head.r, 0, Math.PI * 2);
@@ -676,28 +679,60 @@ function origamiStyle() {
 
 // ---- pencil: a loose graphite sketch with doubled contours, hatching and a gentle line boil ----
 
-const paperCache = new Map();
-/** An off-white paper sheet with a little grain, cached per size. */
-function paperSheet(w, h) {
-  const key = `${w}x${h}`;
-  let c = paperCache.get(key);
+// Backgrounds are painted once per canvas size and kept (a few sizes at once, e.g. the live
+// preview and a replay drawing at the same time), never rebuilt every frame. Paper grain comes
+// from a small tile repeated as a pattern, so painting a sheet is quick at any size.
+const sheetCache = new Map();
+function cachedSheet(kind, w, h, paint) {
+  const key = `${kind}:${w}x${h}`;
+  let c = sheetCache.get(key);
   if (c) return c;
   c = document.createElement('canvas');
   c.width = w; c.height = h;
-  const g = c.getContext('2d');
-  g.fillStyle = '#f4f0e6';
-  g.fillRect(0, 0, w, h);
-  const rnd = seeded(7);
-  for (let i = 0; i < (w * h) / 60; i++) {
-    g.fillStyle = `rgba(${rnd() < 0.5 ? '120,105,80' : '255,255,255'},${(rnd() * 0.12).toFixed(3)})`;
-    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
-  }
-  const vig = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.75);
-  vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, 'rgba(90,70,40,0.12)');
-  g.fillStyle = vig; g.fillRect(0, 0, w, h);
-  paperCache.clear();
-  paperCache.set(key, c);
+  paint(c.getContext('2d'), w, h);
+  sheetCache.set(key, c);
+  while (sheetCache.size > 6) sheetCache.delete(sheetCache.keys().next().value); // drop the oldest
   return c;
+}
+const grainTiles = new Map();
+/** A 256 px tile of paper grain: specks (or short fibres) of dark and light, mostly transparent. */
+function grainTile(kind, dark, light, count, fibre) {
+  let t = grainTiles.get(kind);
+  if (t) return t;
+  t = document.createElement('canvas');
+  t.width = t.height = 256;
+  const g = t.getContext('2d'), rnd = seeded(kind.length * 31 + 7);
+  for (let i = 0; i < count; i++) {
+    g.fillStyle = `rgba(${rnd() < 0.5 ? dark : light},${(rnd() * 0.12).toFixed(3)})`;
+    g.fillRect(rnd() * 256, rnd() * 256, fibre ? 1 + rnd() * 3 : 1 + rnd() * 1.5, fibre ? 1 : 1 + rnd() * 1.5);
+  }
+  grainTiles.set(kind, t);
+  return t;
+}
+
+/** An off-white paper sheet with a little grain. */
+function paperSheet(w, h) {
+  return cachedSheet('paper', w, h, (g) => {
+    g.fillStyle = '#f4f0e6';
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = g.createPattern(grainTile('paper', '120,105,80', '255,255,255', 1100, false), 'repeat');
+    g.fillRect(0, 0, w, h);
+    const vig = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.75);
+    vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, 'rgba(90,70,40,0.12)');
+    g.fillStyle = vig; g.fillRect(0, 0, w, h);
+  });
+}
+
+/** A soft elliptical shadow from a radial gradient (no blur filter, which is costly on the GPU). */
+function softEllipse(ctx, x, y, rx, ry, rgb, alpha) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(1, ry / rx);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+  g.addColorStop(0, `rgba(${rgb},${alpha})`); g.addColorStop(0.6, `rgba(${rgb},${alpha * 0.55})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(-rx, -rx, rx * 2, rx * 2);
+  ctx.restore();
 }
 
 function pencilStyle() {
@@ -981,11 +1016,7 @@ function fuzzyStyle() {
           blob((head.nx + head.hx) / 2, (head.ny + head.hy) / 2, head.r * 0.8, core);
         }
       }
-      ctx.save();
-      ctx.filter = `blur(${Math.max(2, w / 220).toFixed(1)}px)`; // extra softness where supported
-      ctx.drawImage(buf, 0, 0);
-      ctx.filter = 'none';
-      ctx.restore();
+      ctx.drawImage(buf, 0, 0); // the brushes are soft already: no blur filter (costly on the GPU)
       if (p) drawExtras(ctx, w, h, opts, 'ghost');
     },
     reset() { bctx?.clearRect(0, 0, buf.width, buf.height); },
@@ -994,27 +1025,16 @@ function fuzzyStyle() {
 
 // ---- animator sketch: a loose construction drawing on toned paper, graphite or white chalk ----
 
-const tonedCache = new Map();
-/** A warm, toned drawing paper: lighter at the top, a fine grain, darker towards the floor. */
+/** A warm, toned drawing paper: lighter at the top, fine fibres, darker towards the floor. */
 function tonedSheet(w, h) {
-  const key = `${w}x${h}`;
-  let c = tonedCache.get(key);
-  if (c) return c;
-  c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#b9a48d'); grad.addColorStop(0.7, '#b4a089'); grad.addColorStop(1, '#c6b39b');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, w, h);
-  const rnd = seeded(11);
-  for (let i = 0; i < (w * h) / 40; i++) { // fibres: short, mostly horizontal flecks
-    g.fillStyle = `rgba(${rnd() < 0.5 ? '90,72,52' : '235,225,210'},${(rnd() * 0.08).toFixed(3)})`;
-    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 3, 1);
-  }
-  tonedCache.clear();
-  tonedCache.set(key, c);
-  return c;
+  return cachedSheet('toned', w, h, (g) => {
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#b9a48d'); grad.addColorStop(0.7, '#b4a089'); grad.addColorStop(1, '#c6b39b');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = g.createPattern(grainTile('toned', '90,72,52', '235,225,210', 1600, true), 'repeat');
+    g.fillRect(0, 0, w, h);
+  });
 }
 
 function animatorStyle() {
@@ -1068,13 +1088,7 @@ function animatorStyle() {
       if (feet.length) {
         const low = Math.max(...feet.map(f => f[1])), planted = feet.filter(f => low - f[1] < T * 0.25); // ignore a raised foot
         const fy = low + T * 0.06, fx = planted.reduce((a, f) => a + f[0], 0) / planted.length;
-        ctx.save();
-        ctx.filter = `blur(${Math.max(2, T * 0.05).toFixed(1)}px)`;
-        ctx.fillStyle = 'rgba(60,45,32,0.28)';
-        ctx.beginPath();
-        ctx.ellipse(fx + T * 0.55, fy, T * 0.8, T * 0.075, -0.04, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        softEllipse(ctx, fx + T * 0.55, fy, T * 0.85, T * 0.09, '60,45,32', 0.32);
       }
       limbLine(B.legs[0], 2, 4); limbLine(B.legs[1], 2, 4);
       // torso silhouette from one hip, over the shoulders, to the other (the legs close the bottom)
@@ -1202,12 +1216,19 @@ function origamiPleatsStyle() {
       }
       ctx.save();
       ctx.lineJoin = 'round';
-      ctx.save(); // soft shadow behind the figure
-      ctx.filter = `blur(${Math.max(2, T * 0.06).toFixed(1)}px)`;
-      ctx.fillStyle = 'rgba(40,25,10,0.22)';
-      const off = T * 0.07;
-      for (const q of polys) if (!q.clip) { tracePath(ctx, q.pts.map(([x, y]) => [x + off, y + off * 0.6]), true); ctx.fill(); }
-      ctx.restore();
+      // shadow behind the figure: all facets as one path (so overlaps don't darken it), offset twice
+      // at low strength for a soft edge - no blur filter, which is very costly on the GPU
+      for (const [off, alpha] of [[T * 0.09, 0.08], [T * 0.06, 0.12]]) {
+        ctx.beginPath();
+        for (const q of polys) {
+          if (q.clip) continue;
+          ctx.moveTo(q.pts[0][0] + off, q.pts[0][1] + off * 0.6);
+          for (let i = 1; i < q.pts.length; i++) ctx.lineTo(q.pts[i][0] + off, q.pts[i][1] + off * 0.6);
+          ctx.closePath();
+        }
+        ctx.fillStyle = `rgba(40,25,10,${alpha})`;
+        ctx.fill('nonzero');
+      }
       ctx.lineWidth = Math.max(0.6, T / 160);
       for (const q of polys) {
         if (q.clip) { ctx.save(); tracePath(ctx, q.clip, true); ctx.clip(); }
@@ -1233,31 +1254,23 @@ function origamiPleatsStyle() {
 }
 const clamp01 = v => Math.max(0, Math.min(1, v));
 
-const studioCache = new Map();
 /** A soft, warm studio: a muted rose-to-sage wall over a light wooden floor, so cream paper stands out. */
 function studioBackdrop(w, h) {
-  const key = `${w}x${h}`;
-  let c = studioCache.get(key);
-  if (c) return c;
-  c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const g = c.getContext('2d');
-  const floor = h * 0.8;
-  const wall = g.createLinearGradient(0, 0, w, 0);
-  wall.addColorStop(0, '#8d5f63'); wall.addColorStop(0.45, '#8a6a66'); wall.addColorStop(1, '#787a68');
-  g.fillStyle = wall; g.fillRect(0, 0, w, floor);
-  const shade = g.createLinearGradient(0, 0, 0, floor);
-  shade.addColorStop(0, 'rgba(0,0,0,0.25)'); shade.addColorStop(1, 'rgba(255,240,220,0.08)');
-  g.fillStyle = shade; g.fillRect(0, 0, w, floor);
-  g.fillStyle = 'rgba(60,40,35,0.35)'; g.fillRect(0, floor - h * 0.02, w, h * 0.02); // skirting
-  const wood = g.createLinearGradient(0, floor, 0, h);
-  wood.addColorStop(0, '#b88f6c'); wood.addColorStop(1, '#d7b693');
-  g.fillStyle = wood; g.fillRect(0, floor, w, h - floor);
-  g.strokeStyle = 'rgba(90,60,35,0.12)'; g.lineWidth = 1;
-  for (let x = -h; x < w + h; x += h * 0.09) { g.beginPath(); g.moveTo(x, h); g.lineTo(x + (w / 2 - x) * 0.35, floor); g.stroke(); } // boards
-  studioCache.clear();
-  studioCache.set(key, c);
-  return c;
+  return cachedSheet('studio', w, h, (g) => {
+    const floor = h * 0.8;
+    const wall = g.createLinearGradient(0, 0, w, 0);
+    wall.addColorStop(0, '#8d5f63'); wall.addColorStop(0.45, '#8a6a66'); wall.addColorStop(1, '#787a68');
+    g.fillStyle = wall; g.fillRect(0, 0, w, floor);
+    const shade = g.createLinearGradient(0, 0, 0, floor);
+    shade.addColorStop(0, 'rgba(0,0,0,0.25)'); shade.addColorStop(1, 'rgba(255,240,220,0.08)');
+    g.fillStyle = shade; g.fillRect(0, 0, w, floor);
+    g.fillStyle = 'rgba(60,40,35,0.35)'; g.fillRect(0, floor - h * 0.02, w, h * 0.02); // skirting
+    const wood = g.createLinearGradient(0, floor, 0, h);
+    wood.addColorStop(0, '#b88f6c'); wood.addColorStop(1, '#d7b693');
+    g.fillStyle = wood; g.fillRect(0, floor, w, h - floor);
+    g.strokeStyle = 'rgba(90,60,35,0.12)'; g.lineWidth = 1;
+    for (let x = -h; x < w + h; x += h * 0.09) { g.beginPath(); g.moveTo(x, h); g.lineTo(x + (w / 2 - x) * 0.35, floor); g.stroke(); } // boards
+  });
 }
 
 const FACTORIES = { skeleton: skeletonStyle, stickman: stickmanStyle, neon: neonStyle, trails: trailsStyle, sparks: sparksStyle, constellation: constellationStyle, sandman: sandmanStyle, fuzzy: fuzzyStyle, origami: origamiStyle, pencil: pencilStyle, hoops: hoopsStyle, animator: animatorStyle, pleats: origamiPleatsStyle };

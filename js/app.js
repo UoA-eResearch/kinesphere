@@ -657,7 +657,8 @@ function loop(now) {
       err => console.error(err),
     ).finally(() => { state.detecting = false; });
   }
-  renderOverlay(now);
+  // ~60 redraws a second is plenty; on 120-240 Hz screens drawing every refresh only adds GPU load
+  if (now - state.lastRender >= 1000 / 62) renderOverlay(now);
   requestAnimationFrame(loop);
 }
 
@@ -1712,6 +1713,7 @@ function setupReplay(session, root, onTime, metrics = null) {
   };
   const tick = now => {
     if (!playing) return;
+    if (now - last < 1000 / 62) { schedule(tick); return; } // ~60 redraws a second, whatever the screen's refresh rate
     setTime(t + (now - last), clamp((now - last) / 1000, 0, 0.1));
     last = now;
     if (t >= durationMs) { playing = false; btn.textContent = '▶'; return; }
