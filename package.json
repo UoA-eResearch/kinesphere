@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"tests/unit/*.test.mjs\" \"tests/browser/*.test.mjs\"",
     "test:unit": "node --test \"tests/unit/*.test.mjs\"",
-    "test:browser": "node --test --test-concurrency=1 \"tests/browser/*.test.mjs\""
+    "test:browser": "node --test --test-concurrency=1 \"tests/browser/*.test.mjs\"",
+    "build:test-model": "bash ai-partner/make_test_model.sh"
   },
   "devDependencies": {
     "peer": "1.0.2",

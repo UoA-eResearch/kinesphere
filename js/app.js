@@ -17,6 +17,8 @@ import { createGame } from './game.js';
 import { parseCommand, createVoiceControl, voiceSupported, VOICE_HELP } from './voice.js';
 import { SONGS } from './game-core.js';
 import { createSession, roomFromHash, inviteLink, MAX_GUESTS } from './multiplayer.js';
+import { createPartner, createUserConverter, landmarksFromSmpl, worldFromSmpl, smplSequence } from './ai-partner.js';
+import { createAltlando, DEFAULT_MODEL_URL } from './altlando.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -38,6 +40,8 @@ const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
 const BEND_KEY = 'kinesphere:bend';
+const AI_MODEL_KEY = 'kinesphere:aiModel';
+const AI_ID = 'ai-partner'; // the AI partner is drawn and recorded like an online dancer with this id
 const HELP_KEY = 'kinesphere:dashHelp';
 const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
 const NAME_KEY = 'kinesphere:name';
@@ -64,6 +68,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
+  btnAi: $('#btn-ai'), aiPanel: $('#ai-panel'), aiModel: $('#ai-model'), aiFiles: $('#ai-files'), aiToggle: $('#ai-toggle'), aiMimic: $('#ai-mimic'), aiStatus: $('#ai-status'),
   btnMp: $('#btn-mp'), mpPanel: $('#mp-panel'), mpBadge: $('#mp-badge'), joinBox: $('#join-box'), joinName: $('#join-name'),
   btnVoice: $('#btn-voice'), btnVoiceHud: $('#btn-voice-hud'), voiceChip: $('#voice-chip'), voiceHelp: $('#voice-help'),
   bendControls: $('#bend-controls'), bendStrength: $('#bend-strength'), bendStrengthVal: $('#bend-strength-val'), bendReset: $('#bend-reset'),
@@ -676,6 +681,7 @@ function loop(now) {
       err => console.error(err),
     ).finally(() => { state.detecting = false; });
   }
+  updateAiPartner(now);
   // ~60 redraws a second is plenty; on 120-240 Hz screens drawing every refresh only adds GPU load
   if (now - state.lastRender >= 1000 / 62) renderOverlay(now);
   requestAnimationFrame(loop);
@@ -774,6 +780,10 @@ function onDetection(slots, now) {
   updateFraming(present, now);
   if (mp.active) mp.sendPoses(present.map(pose => pose.lm), now, present.map(pose => pose.world ?? null));
   if (present[0]) trackMyBody(present[0].lm);
+  if (ai.partner?.active && present[0]) {
+    const J = ai.converter.convert(present[0], (ui.video.videoWidth || 16) / (ui.video.videoHeight || 9));
+    if (J) ai.partner.push(now, J);
+  }
   updateStatus(present.length);
   if (state.liveViewer) updateLiveBody(slots[0] ?? present[0]);
 }
@@ -832,11 +842,11 @@ function startRecording(trigger, now = performance.now()) {
   ui.countdown.hidden = true;
   // Online dancers in view when the recording starts are recorded too, as extra people after the local ones.
   const local = state.detector.people;
-  const remote = mp.active ? [...state.mp.remotes].filter(([, r]) => r.poses?.length && now - r.at < 1500).slice(0, MAX_RECORDED - local)
+  const remote = mp.active || ai.partner?.active ? [...state.mp.remotes].filter(([, r]) => r.poses?.length && now - r.at < 1500).slice(0, MAX_RECORDED - local)
     .map(([id, r]) => ({ id, name: r.name, lane: r.lane })) : [];
   const slots = remote.length ? [
     ...Array.from({ length: local }, (_, p) => ({ name: local > 1 ? `${myName()} ${p + 1}` : myName(), remote: false })),
-    ...remote.map(r => ({ name: r.name, remote: true, ...(Number.isFinite(r.lane) ? { lane: r.lane } : {}) })),
+    ...remote.map(r => ({ name: r.name, remote: true, ...(r.id === AI_ID ? { ai: true } : {}), ...(Number.isFinite(r.lane) ? { lane: r.lane } : {}) })),
   ] : null;
   state.recording = { startedAt: now, wallStart: Date.now(), lastStored: -Infinity, frames: [], trigger, local, remote, slots, people: local + remote.length, hands: Boolean(state.detector.hands), world: Boolean(state.detector.world) || remote.length > 0 };
   if (remote.length) toast(`Recording you and ${remote.map(r => r.name).join(', ')}`, 3000);
@@ -929,6 +939,19 @@ async function openSession(session, { save = false } = {}) {
 function exportJSON(session) {
   download(`${safeFilename(session.name)}.kinesphere.json`, serialize(session), 'application/json');
 }
+/** One dancer as Altlando / Bailando input: a JSON list of 60 fps frames of 24 SMPL joints (x, y, z). */
+function exportSmpl(session, person = 0) {
+  const view = personView(session, person);
+  const frames = Array.from({ length: view.frameCount }, (_, i) => ({
+    t: view.times[i],
+    lm: view.lm.subarray(i * FRAME_SIZE, (i + 1) * FRAME_SIZE),
+    world: view.world ? view.world.subarray(i * WORLD_SIZE, (i + 1) * WORLD_SIZE) : null,
+  }));
+  const seq = smplSequence(frames, (session.width || 16) / (session.height || 9));
+  if (!seq.length) { toast('No frames with shoulders and hips in view to export.'); return; }
+  const who = (session.people || 1) > 1 ? `-${safeFilename(slotLabel(session, person, { online: false }))}` : '';
+  download(`${safeFilename(session.name)}${who}.altlando.json`, JSON.stringify(seq), 'application/json');
+}
 function exportCSV(session) {
   download(`${safeFilename(session.name)}.csv`, toCSV(session), 'text/csv');
 }
@@ -949,7 +972,7 @@ async function importFile(file) {
 /** Name of person slot p: their name for online dancers and named slots, else "Person n". */
 function slotLabel(session, p, { online = true } = {}) {
   const sl = session.slots?.[p] ?? (session.slotNames ? { name: session.slotNames[p] } : null);
-  if (sl?.name) return `${sl.name}${online && sl.remote ? ' (online)' : ''}`;
+  if (sl?.name) return `${sl.name}${online && sl.remote && !sl.ai ? ' (online)' : ''}`;
   return `Person ${p + 1}`;
 }
 const isRemoteSlot = (session, p) => Boolean(session.slots?.[p]?.remote);
@@ -1001,6 +1024,7 @@ function renderDashboard() {
         <label class="check help-toggle" title="Show or hide the explanatory text under each panel"><input type="checkbox" id="show-help"> Explanations</label>
         <button class="btn" data-action="export-json">Export JSON</button>
         <button class="btn" data-action="export-csv">Export CSV</button>
+        <button class="btn" data-action="export-smpl" title="This dancer as 3D SMPL joints (24 per frame, metres, 60 frames a second): the AIST++-style input the Altlando / Bailando dance models read">Export for Altlando</button>
         <button class="btn btn-ghost" data-action="delete">Delete</button>
         <button class="btn btn-primary" data-action="new">New recording</button>
       </div>
@@ -1052,6 +1076,7 @@ function renderDashboard() {
   });
   root.querySelector('[data-action="export-json"]').onclick = () => exportJSON(session);
   root.querySelector('[data-action="export-csv"]').onclick = () => exportCSV(session);
+  root.querySelector('[data-action="export-smpl"]').onclick = () => exportSmpl(session, state.current.person);
   root.querySelector('[data-action="delete"]').onclick = () => {
     if (!confirm(`Delete “${session.name}”? This cannot be undone unless you exported it.`)) return;
     store.remove(session.id).catch(err => toast(`Could not delete: ${err.message}`)).finally(() => {
@@ -1942,7 +1967,7 @@ function onMpPose(id, poses, aspect, worlds = []) {
   if (!poses) { remotes.delete(id); return; }
   let rem = remotes.get(id);
   if (!rem) {
-    rem = { name: state.mp.peers.find(p => p.id === id)?.name ?? 'Dancer', effects: [], smoothers: createSmoother(state.smoother.id, 6), scale: 0, hipY: null, lane: null };
+    rem = { name: id === AI_ID ? 'AI partner' : state.mp.peers.find(p => p.id === id)?.name ?? 'Dancer', effects: [], smoothers: createSmoother(state.smoother.id, 6), scale: 0, hipY: null, lane: null };
     remotes.set(id, rem);
   }
   rem.poses = poses;
@@ -2142,6 +2167,132 @@ function initMultiplayer() {
 }
 
 // ---------------------------------------------------------------------------------------
+// AI dance partner: the Altlando model runs in the browser (a Web Worker with ONNX Runtime Web);
+// your movement goes in as SMPL joints and its replies are drawn beside you like an online dancer
+// (same lanes, styles and recording).
+
+const ai = { partner: null, converter: createUserConverter(), statusAt: 0, model: null, loadedFrom: null, loading: false, progress: null, loadError: null, files: null };
+
+/** Load the model (once per source): from a folder URL, or from files chosen on this computer. */
+async function ensureAiModel(source) {
+  const key = source.files ? `files:${Object.keys(source.files).sort().join(',')}` : new URL(source.base, location.href).href;
+  if (ai.model?.loaded && ai.loadedFrom === key) return;
+  ai.model?.terminate();
+  ai.model = createAltlando({ onProgress: (loaded, total) => { ai.progress = { loaded, total }; renderAiStatus(); } });
+  ai.loading = true; ai.progress = null; ai.loadError = null; ai.loadedFrom = null;
+  renderAiStatus();
+  try {
+    await ai.model.load(source);
+    ai.loadedFrom = key;
+  } finally {
+    ai.loading = false;
+  }
+}
+
+async function startAiPartner() {
+  stopAiPartner({ keepModel: true });
+  const base = ui.aiModel.value.trim() || DEFAULT_MODEL_URL;
+  ui.aiModel.value = ai.files ? ui.aiModel.value : base;
+  if (!ai.files) localStorage.setItem(AI_MODEL_KEY, base);
+  const partner = createPartner({ generate: (frames, { length }) => ai.model.generate(frames, length), mimic: ui.aiMimic.checked, onStatus: () => renderAiStatus() });
+  ai.partner = partner; // shown as starting while the model loads
+  renderAiStatus();
+  try {
+    await ensureAiModel(ai.files ? { files: ai.files } : { base });
+  } catch (err) {
+    ai.loadError = err.message;
+    if (ai.partner === partner) ai.partner = null;
+    renderAiStatus();
+    return;
+  }
+  if (ai.partner !== partner) return; // stopped while loading
+  ai.converter.reset();
+  partner.start();
+  if (!state.stream) toast('Start the camera so the AI partner can see you dance.', 4000);
+  renderAiStatus();
+}
+
+function stopAiPartner({ keepModel = true } = {}) {
+  ai.partner?.stop();
+  ai.partner = null;
+  state.mp.remotes.delete(AI_ID);
+  if (!keepModel) { ai.model?.terminate(); ai.model = null; ai.loadedFrom = null; }
+  renderAiStatus();
+}
+
+/** Every animation frame: show the partner's current pose (it asks the model when it needs to). */
+function updateAiPartner(now) {
+  if (!ai.partner?.active) return;
+  const J = ai.partner.frameAt(now);
+  if (J) onMpPose(AI_ID, [landmarksFromSmpl(J)], 16 / 9, [worldFromSmpl(J)]);
+  if (now - ai.statusAt > 300) { ai.statusAt = now; renderAiStatus(); }
+}
+
+function renderAiStatus() {
+  const info = ai.partner?.active ? ai.partner.info() : null;
+  const on = Boolean(ai.partner);
+  ui.aiToggle.textContent = on ? 'Stop' : 'Start';
+  ui.btnAi.classList.toggle('is-on', on);
+  ui.btnAi.setAttribute('aria-pressed', String(on));
+  const loaded = ai.model?.loaded;
+  const where = loaded ? ` on ${loaded.backend}` : '';
+  const testModel = loaded?.manifest?.model?.includes('random') ? ' This is a test model with random weights, so its dancing is meaningless.' : '';
+  let text = 'Off.', error = false;
+  if (ai.loadError && !on) {
+    text = /no model at|not found/.test(ai.loadError)
+      ? `The AI partner’s model isn’t on this site yet (${ai.loadError}). It is exported from the trained Altlando weights with ai-partner/export_onnx.py into ${DEFAULT_MODEL_URL}: see the README. You can also choose the files under Model files.`
+      : `Couldn’t load the model: ${ai.loadError}.`;
+    error = true;
+  } else if (on && ai.loading) {
+    const p = ai.progress;
+    text = p?.total ? `Loading the model… ${Math.round((100 * p.loaded) / p.total)}% of ${(p.total / 1e6).toFixed(0)} MB (only the first time)` : 'Loading the model…';
+  } else if (info) {
+    if (info.status === 'error') { text = `The model failed: ${info.error}. Trying again…`; error = true; }
+    else if (info.status === 'dancing') {
+      const slow = info.latency > 2 * (info.need / 60) * 1000 && loaded?.backend !== 'WebGPU' ? ' That is slow here: a browser with WebGPU (Chrome or Edge on a computer) is much faster.' : '';
+      text = `Dancing a reply to your last ${(info.need / 60).toFixed(1)} s (${info.requests} so far; the model takes ${(info.latency / 1000).toFixed(1)} s${where}).${slow}${testModel}`;
+    }
+    else if (info.status === 'thinking') text = `Thinking of a reply${where}…`;
+    else if (!state.stream) text = 'Waiting for the camera: press Start camera.';
+    else text = `Watching you dance… ${Math.round((100 * info.buffered) / info.need)}%`;
+  } else if (on) text = 'Starting…';
+  ui.aiStatus.textContent = text;
+  ui.aiStatus.classList.toggle('is-error', error);
+}
+
+function toggleAiPanel(open = ui.aiPanel.hidden) {
+  ui.aiPanel.hidden = !open;
+  ui.btnAi.setAttribute('aria-expanded', String(open));
+}
+
+/** Model files chosen on this computer: altlando.json and the three .onnx files. */
+async function chooseAiFiles(list) {
+  const files = {};
+  for (const f of list) files[f.name] = f.name.endsWith('.json') ? await f.text() : await f.arrayBuffer();
+  if (!files['altlando.json']) { ai.loadError = 'choose altlando.json together with the .onnx files'; renderAiStatus(); return; }
+  ai.files = files;
+  ui.aiModel.value = `(${list.length} files chosen)`;
+  startAiPartner();
+}
+
+function initAiPartner() {
+  const fromLink = new URLSearchParams(location.search).get('ai');
+  ui.aiModel.value = fromLink || localStorage.getItem(AI_MODEL_KEY) || DEFAULT_MODEL_URL;
+  // one click: start the partner (and show its panel); click again to stop
+  ui.btnAi.addEventListener('click', () => {
+    if (ai.partner) { stopAiPartner(); return; }
+    toggleAiPanel(true);
+    startAiPartner();
+  });
+  ui.aiToggle.addEventListener('click', () => (ai.partner ? stopAiPartner() : startAiPartner()));
+  ui.aiMimic.addEventListener('change', () => { if (ai.partner) startAiPartner(); });
+  ui.aiModel.addEventListener('input', () => { ai.files = null; });
+  ui.aiModel.addEventListener('keydown', e => { if (e.key === 'Enter') startAiPartner(); });
+  ui.aiFiles.addEventListener('change', () => { if (ui.aiFiles.files?.length) chooseAiFiles([...ui.aiFiles.files]); ui.aiFiles.value = ''; });
+  renderAiStatus();
+}
+
+// ---------------------------------------------------------------------------------------
 // Voice control: spoken commands change settings hands-free (Web Speech API).
 
 const voice = createVoiceControl({ onPhrase: handlePhrase, onState: onVoiceState });
@@ -2214,6 +2365,11 @@ function runVoiceCommand(cmd) {
   const cancelCountdown = () => { state.countdown = null; ui.countdown.hidden = true; };
   switch (cmd.type) {
     case 'voice:off': voice.disable(); return 'Voice control off';
+    case 'ai':
+      if (v) { toggleAiPanel(true); startAiPartner(); return 'AI partner on'; }
+      if (!ai.partner) return 'The AI partner is not on';
+      stopAiPartner();
+      return 'AI partner off';
     case 'mp:invite':
       if (state.view !== 'live') setView('live');
       toggleMpPanel(true);
@@ -2406,6 +2562,7 @@ function init() {
   ui.selStyle.addEventListener('change', () => setStyle(ui.selStyle.value));
   initSandControls();
   initBendControls();
+  initAiPartner();
   initVoice();
   initMultiplayer();
   ui.btnStyle.addEventListener('click', nextStyle);

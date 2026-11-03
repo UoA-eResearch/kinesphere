@@ -33,7 +33,8 @@ export async function newPage(browser, { viewport = { width: 1200, height: 900 }
   const tag = label ? `[${label}] ` : '';
   page.on('console', m => { if (m.type() === 'error' && !IGNORED.test(m.text())) errors.push(`${tag}[console] ${m.text().split('\n')[0]}`); });
   page.on('pageerror', e => errors.push(`${tag}[pageerror] ${e.message}`));
-  await page.route(`${ORIGIN}/**`, route => {
+  // routes on the context, so requests from Web Workers (the AI partner model) are served too
+  await ctx.route(`${ORIGIN}/**`, route => {
     let p = decodeURIComponent(new URL(route.request().url()).pathname);
     if (p === '/') p = '/index.html';
     const f = path.join(ROOT, p);
@@ -44,7 +45,7 @@ export async function newPage(browser, { viewport = { width: 1200, height: 900 }
     return route.fulfill({ status: 200, contentType: MIME[path.extname(f)] || 'application/octet-stream', body });
   });
   if (CDN_CACHE) {
-    await page.route(/cdn\.jsdelivr\.net|storage\.googleapis\.com|tfhub\.dev|kaggle\.com/, route => {
+    await ctx.route(/cdn\.jsdelivr\.net|storage\.googleapis\.com|tfhub\.dev|kaggle\.com/, route => {
       const u = new URL(route.request().url());
       const f = path.join(CDN_CACHE, u.hostname, u.pathname);
       if (!fs.existsSync(f)) { errors.push(`[cdn-miss] ${u.href}`); return route.fulfill({ status: 404, body: '' }); }
@@ -55,9 +56,9 @@ export async function newPage(browser, { viewport = { width: 1200, height: 900 }
 }
 
 /** Launches a browser and opens the app in one page. Call `close()` when done. */
-export async function openApp({ viewport, args = [], permissions = [], patch = null, query = '' } = {}) {
+export async function openApp({ viewport, args = [], permissions = [], patch = null, query = '', proxy = true } = {}) {
   const errors = [];
-  const browser = await launch(args);
+  const browser = await launch(args, { proxy });
   const page = await newPage(browser, { viewport, permissions, patch, errors });
   await gotoApp(page, query);
   return { browser, page, errors, close: () => browser.close() };

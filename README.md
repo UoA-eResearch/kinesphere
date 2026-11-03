@@ -201,6 +201,53 @@ everyone is told. Voice commands: “invite” and “leave session”.
 * The dashboard and the game still work during a session; the others keep seeing you while you
   look at the dashboard.
 
+### AI dance partner
+
+Press **🤖 AI partner** under the preview and dance: an AI dancer watches the last 3.7 seconds of
+your movement and dances a reply beside you, again and again as you go on. It is **Altlando**, the
+dance model from Jiazhi Zhou's thesis (*Interactive AI Dancer*, University of Auckland, 2025):
+Bailando (Siyao et al., CVPR 2022) with its music condition removed, so it answers movement alone,
+2048-pose vocabularies for the upper and lower body, and training on AIST++, FineDance and the CMU
+motion capture database. It runs **in your browser** with ONNX Runtime Web (on the GPU through
+WebGPU when the browser has it, otherwise on the CPU with WebAssembly), in a Web Worker so the page
+stays smooth; nothing is sent anywhere, and no server is needed.
+
+* **How it works.** Your pose becomes the model's input format: the 24 joints of the SMPL body
+  model in metres (y up), 60 frames a second, like the AIST++ dataset. The tracked joints come from
+  MediaPipe's 3D world landmarks (or, with MoveNet, the 2D picture lifted onto a plane, scaled to a
+  0.5 m torso); the spine, collarbones, head, hands and feet are placed from them in SMPL's
+  proportions, and the pelvis gets a height from your legs and a position on the floor from where
+  you are in the picture. The model's VQ-VAE turns every 8 frames into a pose code for the upper
+  and one for the lower body; its GPT continues your 28 codes with 28 of its own (choosing the most
+  likely code each time, as Altlando does); the VQ-VAE decodes them back to joints. The partner
+  then dances that reply, cross-fading from one reply into the next, and asks for the next reply
+  before the current one runs out, so it keeps answering what you did most recently.
+* **On screen** the partner is drawn like an online dancer: in its own lane beside you, scaled to
+  your size, in the overlay style you chose, with an *AI partner* name tag. It is **recorded** with
+  you (as a person called *AI partner*, with 3D joints), so the dashboard analyses its dancing and
+  can compare it with yours.
+* **Show the model's reading of my movement** also plays the first half of each reply: the model
+  re-reading your last 3.7 s through its pose vocabulary (the "mimicry" phase in the thesis).
+* **Speed.** The model has about 160 million weights (184 MB, stored as 8-bit). Nearly all the
+  work is the GPT re-reading its 29-code window for every new code, 28 times per reply; with
+  WebGPU (Chrome or Edge on a computer, recent Safari and Firefox) that runs on the graphics card.
+  On the CPU alone (WebAssembly, one thread, as on GitHub Pages) a reply took about 22 s on a
+  4-core virtual machine, far slower than the 3.7 s it lasts, and the panel says when it is slow.
+  The model files download once and are kept in the browser.
+* **Voice:** “AI partner” or “Dance with me” starts it, “AI partner off” stops it.
+* **The model files** live in `models/altlando/` on the site (see `ai-partner/README.md`). They are
+  exported from the trained Altlando weights with `ai-partner/export_onnx.py`; the trained weights
+  are not public yet, so until they are exported into that folder the panel says the model isn't on
+  the site. **Model files** in the panel can load a copy from another folder or from files on this
+  computer instead.
+* **Export for Altlando** on the dashboard saves a dancer as the model's input format (a JSON list
+  of 60 fps frames of 24 SMPL joints, as `main_v1.py --eval_all` in dance-ai-research-project
+  reads), for testing the model offline or building training data.
+
+As the thesis notes, Altlando outputs joint positions rather than SMPL rotations (that was the
+point of Bailando++), so a 3D mesh fitted to its output can bend unnaturally; Kinesphere draws the
+partner with its own overlay styles, which don't need a mesh.
+
 ### Voice control (hands-free)
 
 Press **🎤 Voice control** under the preview (or **🎤 Voice** in its corner, or <kbd>M</kbd>) and
@@ -214,6 +261,7 @@ whether you were understood. Examples:
 | “Start recording” / “Record”, “Stop”, “Cancel” | start after the 3-second countdown, stop (the dashboard opens), cancel the countdown |
 | “Neon”, “Sandman”, “Pencil”, “Animator”, “Origami”, “Pleats”, “Fuzzy blur”, “Hoops”, “Next style” | overlay style |
 | “More bend”, “Less bend”, “Bend off”, “Bend 2”, “Rubbery”, “Normal bend” | how much the pencil, animator and origami-pleats bodies bend with movement (switches to Animator sketch if another style is showing) |
+| “AI partner”, “Dance with me”, “AI partner off” | start or stop the AI dance partner |
 | “Overlay off”, “Hide video”, “Mirror off”, “Flip”, “3D view”, “Fullscreen”, “Smoothing strong” | display options |
 | “Blue sand”, “Gravity up / off / 2”, “Float”, “Longer trails”, “Decay 5 seconds”, “More momentum”, “Reset sand” | Sandman particles (switches to Sandman) |
 | “Two people”, “Just me”, “Use MultiPose / Lite / Heavy / Holistic” | tracking settings |
@@ -284,7 +332,25 @@ remembered.
 | **Replay** | The recorded skeleton(s), with a scrubber. Moving it also moves the cursor on the time charts. **Metrics overlay** draws the kinesphere spheres around the centre of the torso (the same spheres throughout; the one reached is highlighted), the standing shoulder and knee lines with the current level shaded, markers sized by each body part's current speed, and a readout of the current kinesphere class and limb, level, left/right and upper/lower split over the last second and most active body part. Useful for understanding the dashboard and for checking the classifiers. |
 | **Person tabs** | When several people were tracked, one tab per person (coloured like the overlay) switches every metric below, and the overlay, to that dancer. |
 | **Compare two dancers** | The last tab puts two dancers side by side, labelled **A** (blue) and **B** (orange): two people tracked in this session, or anyone from another session saved in the browser, chosen from two menus. It shows an *At a glance* table (duration, pose tracked, kinesphere, left/right, upper/lower, level, most active body part, mean and peak speed in m/s, floor area, distance travelled in total and per minute, distance from the camera) with a B − A column; the two kinesphere bars; body part activity on one shared colour scale, left/right, upper/lower and level figures for each; both speed curves on one chart; and both floor paths on one bird's eye view. Every metric is computed for each dancer separately, relative to their own body size, so people of different heights and recordings of different lengths compare fairly. |
-| **Kinesphere** | Near, medium and far are how far from the body the limbs reached (stored files keep the keys `small`, `medium` and `large`). Share of time in a near, medium or far kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton. With MediaPipe models the kinesphere is measured in **3D** from MediaPipe's world landmarks (metric positions in metres): limb lengths are each segment's median 3D length (also shown in cm) and reaches towards or away from the camera count fully. MoveNet sessions and recordings made before 3D support fall back to 2D screen positions, where limb lengths are the 90th percentile of each segment's on-screen length and reaches towards the camera are under-counted. The panel says which mode a session used. Spheres: **near** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **far** at the hands when outstretched (+ forearm). The spheres are sized from the arms (legs measured from the torso centre are longer, so leg-sized spheres would put far out of the arms' reach) and stay fixed for the whole session. Each hand, and each lifted foot, is classed by the sphere it is nearest to, with the boundaries halfway between neighbouring spheres, and the frame takes the farthest of those; relaxed arms hanging at the sides therefore count as near. A leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24). "Show limb lengths and sphere sizes" lists every estimate. |
+| **Kinesphere** | Near, medium and far are how far from the body the limbs reached (stored files keep the keys `small`, `medium` and `large`). Share of time in a near, medium or far kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton. With MediaPipe models the kinesphere is measured in **3D** from MediaPipe's world landmarks (metric positions in metres): limb lengths are each segment's median 3D length (also shown in cm) and reaches towards or away from the camera count fully. MoveNet sessions and recordings made before 3D support fall back to 2D screen positions, where limb lengths are the 90th percentile of each segment's on-screen length and reaches towards the camera are under-counted. The panel says which mode a session used. Spheres: **near** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **far** at the hands when outstretched (+ forearm). The spheres are sized from the arms (legs measured from the torso centre are longer, so leg-sized spheres would put far out of the arms' reach) and stay fixed for the whole session. Each hand, and each lifted foot, is classed by the sphere it is nearest to, with the boundaries halfway between neighbouring spheres, and the frame takes the farthest of those; relaxed arms hanging at the sides therefore count as near. A leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24).
+
+The AI dance partner is the Altlando model by Jiazhi Zhou: J. Zhou, *Interactive AI Dancer:
+Exploring the Possibilities of Real-Time Full-Body Interactive Dance AI Agent for Creative Support
+and Public Installations*, University of Auckland, 2025, <https://hdl.handle.net/2292/74331>
+(code: [dance-ai-research-project](https://github.com/jzho987/dance-ai-research-project) and the
+`feat/remove-music-condition` branch of [jzho987/Bailando](https://github.com/jzho987/Bailando/tree/feat/remove-music-condition)),
+with notes on the server code by Maxine Yang. It builds on:
+
+* L. Siyao et al., "Bailando: 3D Dance Generation by Actor-Critic GPT with Choreographic Memory,"
+  CVPR 2022, pp. 11040–11049, doi:[10.1109/CVPR52688.2022.01077](https://doi.org/10.1109/CVPR52688.2022.01077).
+  Altlando uses the original Bailando rather than Bailando++, whose rotation-matrix output exists
+  to fit an SMPL mesh, which an avatar drawn from joints doesn't need.
+* L. Siyao et al., "Bailando++: 3D Dance GPT With Choreographic Memory," IEEE TPAMI 45(12),
+  pp. 14192–14207, 2023, doi:[10.1109/TPAMI.2023.3319435](https://doi.org/10.1109/TPAMI.2023.3319435).
+* M. Loper, N. Mahmood, J. Romero, G. Pons-Moll and M. J. Black, "SMPL: A Skinned Multi-Person
+  Linear Model," ACM Trans. Graph. 34(6), article 248, 2015, doi:[10.1145/2816795.2818013](https://doi.org/10.1145/2816795.2818013);
+  reprinted in *Seminal Graphics Papers*, vol. 2, article 88, 2023, doi:[10.1145/3596711.3596800](https://doi.org/10.1145/3596711.3596800).
+  The partner's joints follow SMPL's 24-joint skeleton. "Show limb lengths and sphere sizes" lists every estimate. |
 | **Body** | **Body part activity**: 13 markers (head, shoulders, elbows, hands, hips, knees, feet) sized and coloured by each part's share of all movement; *Show values* prints the percentages on the figure, and "Show body part data" lists share of movement, active time (share of the session the part moved faster than 0.5 torso lengths/s) and mean speed. **Left / right**: the figure split down the middle with each side's share of movement (head excluded). **Upper / lower**: the figure split at the waist with the share of movement in the upper body (shoulders, elbows, hands) and the lower body (hips, knees, feet), head excluded. **Level: where was the activity?**: share of time at a high, medium or low level. This is about position, not which limb moved: *high* when at least one limb is above standing shoulder height, *low* when a hand or the hips are below standing knee height, *medium* otherwise; the head is not counted, standing legs are ignored, and standing heights are measured from the session with the lowest visible joint taken as the floor. The floor is only measured while a foot (ankle, heel or toe) is inside the frame; when the feet are cropped out, the dancer is assumed to be standing and the floor is placed at the session's standing hip height below the hips, so *low* is then only detected from the hands (the overlay says "feet out of view"). |
 | **Speed** | Mean speed of the 13 major joints over time (smoothed over 1 s). Numbers are hidden by default, showing the shape of the curve, the fastest moment and the average as a share of the peak; **Show values** adds the numbers in approximate metres per second (torso lengths per second converted with the dancer's torso length measured in 3D, or a typical 50 cm for MoveNet sessions). Speeds use the body scale of the moment, so stepping towards the camera does not inflate them. Tracking glitches are removed first: a Hampel filter drops any landmark that jumps more than 0.35 torso lengths away from the median of its neighbours within ±3 frames (smooth movement, however fast, stays near that median; a glitch does not), then joint speeds that are extreme outliers for that joint (above Q3 + 3 IQR on a log scale, or faster than 20 torso lengths/s, about 10 m/s) and frames where several joints jump at once are left out. The removed share is reported under the chart, and the same clean-up applies to body part activity. |
 | **Path on the floor** | A bird's eye view of where the dancer moved in the room, with the camera at the top and its field of view shaded. Distance from the camera is estimated from the apparent size of the torso (pinhole camera model with an assumed 65° horizontal field of view, typical of webcams, and the torso length in metres from MediaPipe's world landmarks, or 50 cm for MoveNet); the sideways position comes from where the hips are across the picture. Positions are median-smoothed over ±0.5 s. Shaded 25 cm squares show where the dancer spent the most time. Stats: floor area used (side to side × front to back, 2nd–98th percentile), distance travelled (the smoothed path sampled every 0.25 s) and typical distance from the camera. These are estimates, roughly ±20%, and a camera with a very different field of view scales them. "Show floor position data" lists the path in metres. |
@@ -403,6 +469,11 @@ js/game.js        game mode: song menu, Web Audio music, coach and lane renderin
 js/game-core.js   game logic without DOM or audio: moves, songs, choreography, pose matching
 js/voice.js       voice control: spoken-phrase parser and Web Speech API listener
 js/multiplayer.js dance together online: PeerJS (WebRTC) session, pose packing, invite links
+js/ai-partner.js  AI partner: your pose <-> SMPL-24 joints, replies scheduled and cross-faded
+js/altlando.js    the Altlando model in the browser (promise API over the worker)
+js/altlando-worker.js  ONNX Runtime Web inference: encode, generate, decode (WebGPU / WebAssembly)
+ai-partner/       export_onnx.py (Altlando -> ONNX), requirements, the test-model script
+models/altlando/  the bundled model files (exported from the trained weights)
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export
@@ -415,7 +486,8 @@ tests/helpers/    synthetic sessions with known ground truth, and the browser ha
 Dependencies are loaded from the CDN at runtime: `@mediapipe/tasks-vision` 1.0.1 with the official
 pose landmarker models; only when a MoveNet model is selected, `@tensorflow/tfjs` 4.22 with
 `@tensorflow-models/pose-detection` 2.1.3 and the MoveNet weights from TF Hub / Kaggle; and only
-when a 3D view is opened, `three` 0.170 (via the import map in `index.html`).
+when a 3D view is opened, `three` 0.170 (via the import map in `index.html`); and only when the AI
+partner starts, `onnxruntime-web` 1.22.0.
 
 ### Tests
 
@@ -428,6 +500,15 @@ npx playwright install chromium
 npm test                # everything (about two minutes)
 npm run test:unit       # just the Node tests (a couple of seconds)
 npm run test:browser    # just the browser tests
+```
+
+The AI partner tests need a small model: the real Altlando architecture with random weights,
+exported to ONNX. Build it once with Python and PyTorch (CPU is enough):
+
+```sh
+pip install --index-url https://download.pytorch.org/whl/cpu torch
+pip install -r ai-partner/requirements-export.txt
+npm run build:test-model   # clones dance-ai-research-project, writes test-results/altlando-tiny
 ```
 
 - **Unit tests** (`tests/unit/`) check the analysis against synthetic sessions with known ground
@@ -446,7 +527,12 @@ npm run test:browser    # just the browser tests
   camera and a scripted dancer in place of the pose model's output, they check the styles, the
   "Body partially out of frame" hint, recording and voice control (with a fake speech
   recogniser). Multiplayer is tested with a host and two guests in separate browser contexts and
-  a local PeerJS signalling server.
+  a local PeerJS signalling server. The AI partner tests check that the model in the browser gives
+  exactly what PyTorch gives for the same input (the same pose codes and decoded joints), then
+  dance with the partner, record it, stop and restart it, load model files chosen from disk,
+  explain a missing model and export a dancer for Altlando. Unit tests cover the pose conversions
+  to and from SMPL joints (bone lengths, left and right, y up), resampling to 60 fps and the
+  reply scheduling (when it asks, cross-fades, errors and back-off).
 
 The live and multiplayer tests load MediaPipe and PeerJS from the CDN. Offline or behind a
 restrictive proxy, set `KINESPHERE_CDN_CACHE` to a directory of copies laid out as

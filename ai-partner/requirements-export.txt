@@ -1,0 +1,10 @@
+# For ai-partner/export_onnx.py (exporting Altlando to ONNX). CPU builds of PyTorch are enough:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install -r ai-partner/requirements-export.txt
+numpy
+easydict
+onnx
+onnxruntime
+tqdm
+matplotlib
+tensorboard

@@ -30,6 +30,7 @@ const cases = [
   ['more bend', 'bend:{"strength":0.5,"relative":true}'], ['less bend', 'bend:{"strength":-0.5,"relative":true}'], ['make it wobblier', 'bend:{"strength":0.5,"relative":true}'],
   ['bend off', 'bend:{"strength":0}'], ['stiff', 'bend:{"strength":0}'], ['bend two', 'bend:{"strength":2}'], ['bend 1.5', 'bend:{"strength":1.5}'], ['rubbery', 'bend:{"strength":2}'],
   ['normal bend', 'bend:reset'], ['reset bend', 'bend:reset'],
+  ['AI partner', 'ai:true'], ['dance with me', 'ai:true'], ['start the AI partner', 'ai:true'], ['AI partner off', 'ai:false'], ['stop the robot dancer', 'ai:false'],
   ['invite', 'mp:invite'], ['leave the session', 'mp:leave'],
 ];
 for (const [phrase, want] of cases) test(`"${phrase}" → ${want}`, () => assert.equal(show(parseCommand(phrase)), want));

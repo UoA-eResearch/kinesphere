@@ -30,6 +30,18 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ai-partner/requirements-export.txt
+
+      - name: Build the test AI partner model (Altlando architecture, random weights, exported to ONNX)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r ai-partner/requirements-export.txt
+          npm run build:test-model
+
       - name: Unit tests
         run: npm run test:unit
 

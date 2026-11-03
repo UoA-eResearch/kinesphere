@@ -502,6 +502,15 @@ select, input[type="text"] {
 .hud-top .rec-badge:not([hidden]) { margin-right: 0; }
 .mp-panel { max-width: 640px; margin: 0.75rem auto 0; padding: 1rem 1.2rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 .mp-panel[hidden] { display: none; }
+.ai-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin: 0.4rem 0 0.6rem; }
+.ai-url { flex: 1 1 16rem; min-width: 0; }
+.ai-url input { flex: 1; min-width: 0; width: 100%; font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.ai-status { font-size: 0.9rem; }
+.ai-files { cursor: pointer; }
+.ai-advanced { margin-top: 0.4rem; font-size: 0.9rem; }
+.ai-advanced summary { cursor: pointer; color: var(--ink-2); }
+.ai-status.is-error { color: var(--danger, #c0392b); }
+#btn-ai.is-on { border-color: var(--accent); color: var(--accent); }
 .mp-panel h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
 .mp-panel p { margin: 0.3rem 0 0.6rem; color: var(--ink-2); font-size: 0.92rem; }
 .mp-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
