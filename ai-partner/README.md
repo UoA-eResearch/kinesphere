@@ -25,6 +25,9 @@ movement with lively, dance-like replies, and steady repetitive movement can get
 settles into a held pose. Exporting Altlando's own weights with the same script (below) swaps
 them in.
 
+The main README's *How the bundled Bailando weights differ from Altlando's* compares the two
+(vocabulary, training data, training, context length, and the thesis's results).
+
 The Bailando weights are © 2022 S-Lab under the S-Lab License 1.0 (`LICENSE-BAILANDO`, copied next
 to the model by the export): non-commercial use and redistribution only.
 

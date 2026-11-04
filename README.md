@@ -259,6 +259,51 @@ cost of running a GPT without the music it was trained with.
   of 60 fps frames of 24 SMPL joints, as `main_v1.py --eval_all` in dance-ai-research-project
   reads), for testing the model offline or building training data.
 
+#### How the bundled Bailando weights differ from Altlando's
+
+The two share one architecture and input format: a VQ-VAE (convolutions 512 wide and 3 deep, one
+pose code per 8 frames, separate upper- and lower-body halves plus a root-velocity decoder) feeding
+a GPT (6 base + 6 head layers, 12 heads, 768 dimensions), on SMPL-24 joint positions in metres at
+60 frames a second. That is why one export script and one browser runtime handle both. What
+differs is how the weights were trained (from the thesis, §6.2.3–6.3, pp. 43–47, and the
+checkpoints and configs):
+
+| | Bundled: Bailando's released weights, music removed | Altlando (Zhou 2025) |
+| --- | --- | --- |
+| **Music** | GPT trained *with* music: three token streams (music, upper, lower body), the music made from 438 audio features. Kinesphere removes the music stream afterwards, so the GPT now attends over a two-stream input it never saw in training | GPT trained *without* music: two token streams (upper, lower body) from the start |
+| **Pose vocabulary** | 512 codes for each half of the body | 2048 codes for each half (512 were "not enough for contemporary dance") |
+| **Training data** | AIST++ only: about 5 hours of 10 street and jazz genres (break, pop, lock, middle and LA hip-hop, house, waack, krump, street jazz, ballet jazz) | AIST++ + FineDance (about 7 hours, 22 genres) + the CMU motion-capture database (walking, jumping, climbing and other everyday movement), all fitted with SMPL and converted to the same joint format |
+| **Training** | VQ-VAE 500 epochs; GPT 400 epochs (batch 32, learning rate 3 × 10⁻⁴), followed in Bailando by actor-critic fine-tuning on a music beat-alignment reward. Kinesphere uses the GPT from *before* that music-specific stage (`cc_motion_gpt` epoch 400; VQ-VAE `sep_vqvae_root` epoch 500) | VQ-VAE 500 epochs on the joints (batch 128, learning rate 10⁻⁵, no scheduler), then the root (locomotion) branch, then the GPT (batch 128, learning rate 2 × 10⁻⁴), about 300 epochs in 24 hours on two H100 GPUs |
+| **Context** | 29 codes (3.7 s of the dancer) | Two versions: 29 codes (3.7 s), used for the comparison in the thesis, and 45 codes (6 s), used in the Unity tool |
+| **Availability** | Public (Bailando's README), S-Lab License, non-commercial | Not public |
+
+What the thesis found when comparing Altlando (29 codes) with the original Bailando, measuring how
+well each reply correlates with the dancer's movement over 13 overlapping windows (Figures
+6.1–6.3):
+
+* **Reading the dancer** (the first windows, the "mimicry" phase): much the same overall, about 0.3.
+* **The reply** stays related to the dancer's movement for longer with Altlando: around 0.1 out to
+  the 12th window, where Bailando's falls to about zero by the 4th.
+* **By kind of movement:** Altlando does better with slow, low, floor-level and still movement
+  (clusters 3, 4, 5 and 8), which the thesis puts down to the CMU data, and worse with fast or stiff
+  movement (clusters 2 and 7).
+* **The 6 s version** sometimes fell back to CMU-like movement (it once started "swimming") and
+  occasionally turned the torso a full 360°.
+
+The thesis doesn't say whether the Bailando in that comparison was given music. Its continuous
+and VAE prototypes (§6.2.1–6.2.2), which fed the encoder's output to the GPT without quantising
+it, drifted back to a neutral pose and were set aside; Altlando keeps Bailando's quantised pose
+codes.
+
+In practice, the bundled model answers in AIST++ street and jazz dance vocabulary, with coarser
+poses, and without the training on music-free input that kept Altlando's replies related to the
+dancer for longer. Steady, repetitive movement can get a reply that settles into one held pose.
+Altlando's 29-code weights would drop in with the same export (`--vqvae` / `--gpt` instead of
+`--bailando`; see `ai-partner/README.md`). The 45-code version would need a small change, because
+the export and the browser runtime assume 28 codes of input and a 29-code window. The two models'
+codes can't be mixed: a code number means a different pose in each codebook, so a swap replaces
+the VQ-VAE and the GPT together.
+
 As the thesis notes, Bailando and Altlando output joint positions rather than SMPL rotations (that
 was the point of Bailando++), so a 3D mesh fitted to their output can bend unnaturally; Kinesphere
 draws the partner with its own overlay styles, which don't need a mesh.
