@@ -220,8 +220,10 @@ over unchanged (`ai-partner/export_onnx.py --bailando`). Altlando also retrained
 music, with 2048-pose vocabularies and more data (AIST++, FineDance, CMU); those weights aren't
 public, so here the released Bailando GPT runs without the music it was trained with. In tests it
 answers varied or still movement with lively, dance-like replies, while steady repetitive movement
-(walking on the spot) can get a reply that settles into one held pose, the "regress to still"
-behaviour the thesis describes.
+(walking on the spot) can get a reply that settles into one held pose. The thesis reports that
+Bailando++ given the dancer's pose codes did not fall back to stillness, and that Altlando's
+replies stayed related to the dancer's movement for longer than Bailando's, so this is likely the
+cost of running a GPT without the music it was trained with.
 
 * **How it works.** Your pose becomes the model's input format: the 24 joints of the SMPL body
   model in metres (y up), 60 frames a second, like the AIST++ dataset. The tracked joints come from
