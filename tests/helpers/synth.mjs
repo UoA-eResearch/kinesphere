@@ -166,7 +166,8 @@ export function floorSession(secs = 60, { glitches = true } = {}) {
     if (glitches && i % 211 === 101) lm[16 * STRIDE] += 0.33;
     if (glitches && i % 509 === 300) for (let k = 0; k < 33; k++) lm[k * STRIDE] += 0.2;
     const world = new Float32Array(WORLD_SIZE);
-    WORLD_JOINTS.forEach((k, j) => { const p = B[k] ?? B[0]; world.set([p[0], 1.0 - p[1], 0], j * 3); });
+    // MediaPipe world landmarks: x towards the dancer's left (they face the camera), y down from the hips
+    WORLD_JOINTS.forEach((k, j) => { const p = B[k] ?? B[0]; world.set([-p[0], 1.0 - p[1], 0], j * 3); });
     frames.push({ t: t * 1000, lm, hands: null, world });
   }
   const s = buildSession({ frames, width: W, height: H, model: 'lite', engine: 'mediapipe', people: 1, trigger: 'button', startedAt: Date.now() - secs * 1000, mirrored: true });

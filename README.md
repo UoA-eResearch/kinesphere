@@ -204,13 +204,24 @@ everyone is told. Voice commands: “invite” and “leave session”.
 ### AI dance partner
 
 Press **🤖 AI partner** under the preview and dance: an AI dancer watches the last 3.7 seconds of
-your movement and dances a reply beside you, again and again as you go on. It is **Altlando**, the
-dance model from Jiazhi Zhou's thesis (*Interactive AI Dancer*, University of Auckland, 2025):
-Bailando (Siyao et al., CVPR 2022) with its music condition removed, so it answers movement alone,
-2048-pose vocabularies for the upper and lower body, and training on AIST++, FineDance and the CMU
-motion capture database. It runs **in your browser** with ONNX Runtime Web (on the GPU through
-WebGPU when the browser has it, otherwise on the CPU with WebAssembly), in a Web Worker so the page
-stays smooth; nothing is sent anywhere, and no server is needed.
+your movement and dances a reply beside you, again and again as you go on. Nothing to install: the
+model is bundled with the site and runs **in your browser** with ONNX Runtime Web (on the GPU
+through WebGPU when the browser has it, otherwise on the CPU with WebAssembly), in a Web Worker so
+the page stays smooth; nothing is sent anywhere, and no server is needed.
+
+The model is **Bailando** (Siyao et al., CVPR 2022) with its **original released weights**, trained
+on the AIST++ dance dataset, and with **Jay Zhou's fix from Altlando** (*Interactive AI Dancer*,
+University of Auckland, 2025) re-implemented on top: the music condition is removed from the GPT,
+so it answers movement alone. Bailando's GPT reads three streams of tokens side by side (music,
+upper body, lower body: an attention input of B × 3T × C); Altlando's reads only the two body
+streams (B × 2T × C). The original weights fit that shape directly: the music projection is
+dropped and the position table keeps its upper- and lower-body rows, and every other weight carries
+over unchanged (`ai-partner/export_onnx.py --bailando`). Altlando also retrained the model without
+music, with 2048-pose vocabularies and more data (AIST++, FineDance, CMU); those weights aren't
+public, so here the released Bailando GPT runs without the music it was trained with. In tests it
+answers varied or still movement with lively, dance-like replies, while steady repetitive movement
+(walking on the spot) can get a reply that settles into one held pose, the "regress to still"
+behaviour the thesis describes.
 
 * **How it works.** Your pose becomes the model's input format: the 24 joints of the SMPL body
   model in metres (y up), 60 frames a second, like the AIST++ dataset. The tracked joints come from
@@ -219,7 +230,7 @@ stays smooth; nothing is sent anywhere, and no server is needed.
   proportions, and the pelvis gets a height from your legs and a position on the floor from where
   you are in the picture. The model's VQ-VAE turns every 8 frames into a pose code for the upper
   and one for the lower body; its GPT continues your 28 codes with 28 of its own (choosing the most
-  likely code each time, as Altlando does); the VQ-VAE decodes them back to joints. The partner
+  likely code each time, as Bailando and Altlando do); the VQ-VAE decodes them back to joints. The partner
   then dances that reply, cross-fading from one reply into the next, and asks for the next reply
   before the current one runs out, so it keeps answering what you did most recently.
 * **On screen** the partner is drawn like an online dancer: in its own lane beside you, scaled to
@@ -228,25 +239,27 @@ stays smooth; nothing is sent anywhere, and no server is needed.
   can compare it with yours.
 * **Show the model's reading of my movement** also plays the first half of each reply: the model
   re-reading your last 3.7 s through its pose vocabulary (the "mimicry" phase in the thesis).
-* **Speed.** The model has about 160 million weights (184 MB, stored as 8-bit). Nearly all the
-  work is the GPT re-reading its 29-code window for every new code, 28 times per reply; with
-  WebGPU (Chrome or Edge on a computer, recent Safari and Firefox) that runs on the graphics card.
-  On the CPU alone (WebAssembly, one thread, as on GitHub Pages) a reply took about 22 s on a
-  4-core virtual machine, far slower than the 3.7 s it lasts, and the panel says when it is slow.
-  The model files download once and are kept in the browser.
+* **Speed.** The model has about 150 million weights (160 MB, stored as 8-bit, downloaded the first
+  time and kept in the browser). Nearly all the work is the GPT re-reading its 29-code window for
+  every new code, 28 times per reply; with WebGPU (Chrome or Edge on a computer, recent Safari and
+  Firefox) that runs on the graphics card. On the CPU alone (WebAssembly, one thread, as on GitHub
+  Pages) a reply took about 12 s on a 4-core virtual machine, slower than the 3.7 s it lasts, so the
+  partner pauses between replies, and the panel says when it is slow.
 * **Voice:** “AI partner” or “Dance with me” starts it, “AI partner off” stops it.
-* **The model files** live in `models/altlando/` on the site (see `ai-partner/README.md`). They are
-  exported from the trained Altlando weights with `ai-partner/export_onnx.py`; the trained weights
-  are not public yet, so until they are exported into that folder the panel says the model isn't on
-  the site. **Model files** in the panel can load a copy from another folder or from files on this
-  computer instead.
+* **The model files** are in `models/altlando/` (see its README and `ai-partner/README.md`).
+  **Model files** in the panel can load another export instead, from a folder or from files on this
+  computer: for example Altlando's own trained weights, exported with the same script, when they
+  are available.
+* **Licence.** Bailando's weights are released under the S-Lab License 1.0, which allows
+  redistribution for **non-commercial** use only; the licence ships with them
+  (`models/altlando/LICENSE-BAILANDO`). Kinesphere's own code stays MIT.
 * **Export for Altlando** on the dashboard saves a dancer as the model's input format (a JSON list
   of 60 fps frames of 24 SMPL joints, as `main_v1.py --eval_all` in dance-ai-research-project
   reads), for testing the model offline or building training data.
 
-As the thesis notes, Altlando outputs joint positions rather than SMPL rotations (that was the
-point of Bailando++), so a 3D mesh fitted to its output can bend unnaturally; Kinesphere draws the
-partner with its own overlay styles, which don't need a mesh.
+As the thesis notes, Bailando and Altlando output joint positions rather than SMPL rotations (that
+was the point of Bailando++), so a 3D mesh fitted to their output can bend unnaturally; Kinesphere
+draws the partner with its own overlay styles, which don't need a mesh.
 
 ### Voice control (hands-free)
 
@@ -334,7 +347,8 @@ remembered.
 | **Compare two dancers** | The last tab puts two dancers side by side, labelled **A** (blue) and **B** (orange): two people tracked in this session, or anyone from another session saved in the browser, chosen from two menus. It shows an *At a glance* table (duration, pose tracked, kinesphere, left/right, upper/lower, level, most active body part, mean and peak speed in m/s, floor area, distance travelled in total and per minute, distance from the camera) with a B − A column; the two kinesphere bars; body part activity on one shared colour scale, left/right, upper/lower and level figures for each; both speed curves on one chart; and both floor paths on one bird's eye view. Every metric is computed for each dancer separately, relative to their own body size, so people of different heights and recordings of different lengths compare fairly. |
 | **Kinesphere** | Near, medium and far are how far from the body the limbs reached (stored files keep the keys `small`, `medium` and `large`). Share of time in a near, medium or far kinesphere, shown as three figures (the most typical pose in each class, drawn inside the three spheres) and a stacked bar. The spheres are concentric around the centre of the torso (midway between the mid-hip and the mid-shoulder) and sized from the dancer's own limb lengths, measured from the skeleton. With MediaPipe models the kinesphere is measured in **3D** from MediaPipe's world landmarks (metric positions in metres): limb lengths are each segment's median 3D length (also shown in cm) and reaches towards or away from the camera count fully. MoveNet sessions and recordings made before 3D support fall back to 2D screen positions, where limb lengths are the 90th percentile of each segment's on-screen length and reaches towards the camera are under-counted. The panel says which mode a session used. Spheres: **near** at the distance of the proximal joints (centre to shoulder), **medium** at the mid-limb joints when outstretched (+ upper arm), **far** at the hands when outstretched (+ forearm). The spheres are sized from the arms (legs measured from the torso centre are longer, so leg-sized spheres would put far out of the arms' reach) and stay fixed for the whole session. Each hand, and each lifted foot, is classed by the sphere it is nearest to, with the boundaries halfway between neighbouring spheres, and the frame takes the farthest of those; relaxed arms hanging at the sides therefore count as near. A leg only counts while lifted off the floor, since a standing leg is support rather than reach. Based on the multi-scale kinesphere of Kubota et al., *Emotion Estimation Using Laban Feature Values Based on a Multi-scale Kinesphere* (SUI '24).
 
-The AI dance partner is the Altlando model by Jiazhi Zhou: J. Zhou, *Interactive AI Dancer:
+The AI dance partner runs Bailando's released weights with the music condition removed as in
+Jiazhi Zhou's Altlando model: J. Zhou, *Interactive AI Dancer:
 Exploring the Possibilities of Real-Time Full-Body Interactive Dance AI Agent for Creative Support
 and Public Installations*, University of Auckland, 2025, <https://hdl.handle.net/2292/74331>
 (code: [dance-ai-research-project](https://github.com/jzho987/dance-ai-research-project) and the
@@ -470,10 +484,10 @@ js/game-core.js   game logic without DOM or audio: moves, songs, choreography, p
 js/voice.js       voice control: spoken-phrase parser and Web Speech API listener
 js/multiplayer.js dance together online: PeerJS (WebRTC) session, pose packing, invite links
 js/ai-partner.js  AI partner: your pose <-> SMPL-24 joints, replies scheduled and cross-faded
-js/altlando.js    the Altlando model in the browser (promise API over the worker)
+js/altlando.js    the dance model in the browser (promise API over the worker)
 js/altlando-worker.js  ONNX Runtime Web inference: encode, generate, decode (WebGPU / WebAssembly)
-ai-partner/       export_onnx.py (Altlando -> ONNX), requirements, the test-model script
-models/altlando/  the bundled model files (exported from the trained weights)
+ai-partner/       export_onnx.py (Bailando / Altlando -> ONNX), safe checkpoint loading, the test-model script
+models/altlando/  the bundled model: Bailando's weights without music, int8 ONNX (S-Lab License, non-commercial)
 js/analysis.js    metrics (kinesphere, body part activity, level, speed, path, shapes)
 js/charts.js      dependency-free SVG/HTML charts
 js/session.js     session model, compact JSON format, IndexedDB storage, JSON/CSV export
@@ -528,9 +542,10 @@ npm run build:test-model   # clones dance-ai-research-project, writes test-resul
   "Body partially out of frame" hint, recording and voice control (with a fake speech
   recogniser). Multiplayer is tested with a host and two guests in separate browser contexts and
   a local PeerJS signalling server. The AI partner tests check that the model in the browser gives
-  exactly what PyTorch gives for the same input (the same pose codes and decoded joints), then
-  dance with the partner, record it, stop and restart it, load model files chosen from disk,
-  explain a missing model and export a dancer for Altlando. Unit tests cover the pose conversions
+  exactly what PyTorch gives for the same input (the same pose codes and decoded joints), and that
+  the bundled model loads and gives exactly what onnxruntime gives, with human bone lengths; then
+  they dance with the partner, record it, stop and restart it, load model files chosen from disk,
+  report a folder without a model and export a dancer for Altlando. Unit tests cover the pose conversions
   to and from SMPL joints (bone lengths, left and right, y up), resampling to 60 fps and the
   reply scheduling (when it asks, cross-fades, errors and back-off).
 

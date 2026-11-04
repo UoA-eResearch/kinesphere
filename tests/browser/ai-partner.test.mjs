@@ -55,6 +55,30 @@ test('in the browser, the model gives exactly what PyTorch gives', async () => {
   assert.ok(Math.abs(out.root[1] - flat[0]) < 1e-4, 'and moves by the decoded root velocity');
 });
 
+test('the bundled model (Bailando, music removed) loads from models/altlando/ and matches onnxruntime', async () => {
+  const ref = JSON.parse(fs.readFileSync(path.join(ROOT, 'models/altlando/reference.json'), 'utf8'));
+  const out = await app.page.evaluate(async payload => {
+    const { createAltlando, DEFAULT_MODEL_URL } = await import('/js/altlando.js');
+    const model = createAltlando();
+    const info = await model.load({ base: DEFAULT_MODEL_URL });
+    const frames = await model.generate(payload.map(f => Float32Array.from(f)), 28);
+    model.terminate();
+    // bone lengths of the generated half, to check it is still a human body
+    const P = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21];
+    const bones = frames.slice(224).map(f => P.map((p, i) => (p < 0 ? 0 : Math.hypot(f[i * 3] - f[p * 3], f[i * 3 + 1] - f[p * 3 + 1], f[i * 3 + 2] - f[p * 3 + 2]))));
+    return { model: info.manifest.model, n: frames.length, codesUp: frames.codesUp, codesDown: frames.codesDown, raw: Array.from(frames.raw), thigh: bones.map(b => b[4]) };
+  }, ref.payload);
+  assert.match(out.model, /Bailando/);
+  assert.equal(out.n, 448);
+  assert.deepEqual(out.codesUp, ref.codesUp);
+  assert.deepEqual(out.codesDown, ref.codesDown);
+  const flat = ref.rawPose.flat();
+  let err = 0;
+  for (let i = 0; i < flat.length; i++) err = Math.max(err, Math.abs(out.raw[i] - flat[i]));
+  assert.ok(err < 1e-3, `decoded pose differs by ${err}`);
+  assert.ok(out.thigh.every(l => l > 0.25 && l < 0.6), `thigh length ${Math.min(...out.thigh)}..${Math.max(...out.thigh)} m`);
+});
+
 test('the AI partner button starts it: it watches for 3.7 s, then dances a reply beside you', async () => {
   const { page } = app;
   await startCameraWithDancer(page, swingingDancer);
@@ -108,11 +132,11 @@ test('model files chosen on this computer work too', async () => {
   await page.click('#ai-toggle');
 });
 
-test('without a model on the site it says how to add one', async () => {
+test('a folder without a model says so', async () => {
   const { page } = app;
   await page.fill('#ai-model', 'models/nothing-here/');
   await page.click('#ai-toggle');
-  await waitStatus(page, /isn’t on this site yet/);
+  await waitStatus(page, /No model found/);
   assert.match(await status(page), /export_onnx\.py/);
   assert.equal(await page.textContent('#ai-toggle'), 'Start');
 });

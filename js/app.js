@@ -2240,7 +2240,7 @@ function renderAiStatus() {
   let text = 'Off.', error = false;
   if (ai.loadError && !on) {
     text = /no model at|not found/.test(ai.loadError)
-      ? `The AI partner’s model isn’t on this site yet (${ai.loadError}). It is exported from the trained Altlando weights with ai-partner/export_onnx.py into ${DEFAULT_MODEL_URL}: see the README. You can also choose the files under Model files.`
+      ? `No model found (${ai.loadError}). Check the folder under Model files, or choose the files; models are exported with ai-partner/export_onnx.py (see the README).`
       : `Couldn’t load the model: ${ai.loadError}.`;
     error = true;
   } else if (on && ai.loading) {

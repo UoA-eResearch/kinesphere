@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-Export the Altlando dance model (Zhou 2025) to ONNX so Kinesphere can run it in the browser.
+Export a music-free Bailando dance model to ONNX so Kinesphere can run it in the browser.
 
-Altlando is Bailando (Siyao et al., CVPR 2022) with the music condition removed, 2048-code
-vocabularies and more training data. Its code lives in dance-ai-research-project
-(src/bailandopp/app/models_v1); this script imports that code, loads the trained weights and writes:
+Altlando (Zhou 2025) is Bailando (Siyao et al., CVPR 2022) with the music condition removed from
+the GPT, 2048-code vocabularies and more training data. Its code lives in dance-ai-research-project
+(src/bailandopp/app/models_v1). This script builds the networks from that code and either
+
+  --bailando   loads the ORIGINAL Bailando weights (AIST++, 512 codes; public, S-Lab License) into
+               Altlando's music-free GPT: Jay's fix applied to the released model, without retraining
+               (the music projection is dropped and the position table keeps its upper- and
+               lower-body thirds; every other weight carries over unchanged), or
+  --vqvae/--gpt  loads trained Altlando checkpoints,
+
+and writes:
 
     altlando.json   manifest read by the browser (sizes, file names, provenance)
     encoder.onnx    pose [1, 225, 72] float32 -> codes_up, codes_down [1, 28] int64
@@ -20,6 +28,14 @@ Poses are AIST++-style SMPL-24 joint positions (metres, y up, 60 frames a second
 Usage
     pip install torch onnx onnxruntime numpy easydict
     git clone https://github.com/jzho987/dance-ai-research-project
+
+    # what Kinesphere bundles: the original Bailando weights (experiments.zip from Bailando's README),
+    # music removed, int8, split for GitHub
+    python3 ai-partner/export_onnx.py \\
+        --altlando-app dance-ai-research-project/src/bailandopp/app \\
+        --bailando experiments --quantize --out models/altlando
+
+    # trained Altlando weights
     python3 ai-partner/export_onnx.py \\
         --altlando-app dance-ai-research-project/src/bailandopp/app \\
         --vqvae weight/vqvae_lb.pt --gpt weight/gpt_lb_l_240.pt \\
@@ -41,7 +57,7 @@ CODE_FRAMES = 8
 SHIFT = 28  # codes of the dancer's movement the model starts from (224 frames, 3.7 s)
 
 
-def load_configs(app_dir, tiny):
+def load_configs(app_dir, tiny, bins=None):
     sys.path.insert(0, os.path.abspath(app_dir))
     from easydict import EasyDict
     import config.gpt_config_lb as gpt_cf
@@ -52,6 +68,12 @@ def load_configs(app_dir, tiny):
     for half in (vq.up_half, vq.down_half):
         half['device'] = 'cpu'
     gpt = EasyDict({k: copy.deepcopy(getattr(gpt_cf, k)) for k in dir(gpt_cf) if not k.startswith('_')})
+    if bins:  # the original Bailando: 512 codes for each half of the body
+        for half in (vq.up_half, vq.down_half):
+            half['l_bins'] = bins
+        vq.l_bins = bins
+        gpt.base.update(vocab_size_up=bins, vocab_size_down=bins)
+        gpt.head.update(vocab_size=bins, vocab_size_up=bins, vocab_size_down=bins)
     if tiny:  # same structure (8 frames per code, 2048 codes, 29-code context), far fewer weights
         for half in (vq.up_half, vq.down_half):
             half.update(width=32, emb_width=32, depth=1)
@@ -119,10 +141,27 @@ def strip_module(state):
     return {k[7:] if k.startswith('module.') else k: v for k, v in state.items()}
 
 
+def bailando_gpt_without_music(state, block):
+    """
+    Jay's fix (Altlando), applied to the original Bailando GPT's weights: the music tokens are taken
+    out of the sequence, so the attention input goes from B x (3T) x C (music, upper, lower body) to
+    B x (2T) x C. The music projection (cond_emb) goes, and the position table keeps the positions of
+    the upper- and lower-body tokens (rows block..2*block and 2*block..3*block); the attention, MLP and
+    output weights are the same shapes and carry over unchanged.
+    """
+    import torch
+    out = {k: v for k, v in state.items() if not k.startswith('gpt_base.cond_emb.')}
+    pos = state['gpt_base.pos_emb']
+    assert pos.shape[1] == 3 * block, f'expected {3 * block} positions (music, up, down), got {pos.shape[1]}'
+    out['gpt_base.pos_emb'] = torch.cat([pos[:, block:2 * block], pos[:, 2 * block:3 * block]], dim=1).clone()
+    return out
+
+
 def build(args):
     import torch
+    from safe_load import load_checkpoint
     torch.manual_seed(args.seed)
-    vq_cfg, gpt_cfg = load_configs(args.altlando_app, args.tiny)
+    vq_cfg, gpt_cfg = load_configs(args.altlando_app, args.tiny, bins=512 if args.bailando else None)
     from models_v1.sep_vqvae_root import SepVQVAER
     from models_v1.cross_cond_gpt2_nm import CrossCondGPT2NoMusic
 
@@ -136,8 +175,16 @@ def build(args):
                 if hasattr(m, 'init'):
                     m.init = True
     else:
-        vqvae.load_state_dict(strip_module(torch.load(args.vqvae, map_location='cpu')['model']), strict=False)
-        gpt.load_state_dict(strip_module(torch.load(args.gpt, map_location='cpu')['model']))
+        vq_path, gpt_path = (os.path.join(args.bailando, 'sep_vqvae_root', 'ckpt', 'epoch_500.pt'),
+                             os.path.join(args.bailando, 'cc_motion_gpt', 'ckpt', 'epoch_400.pt')) if args.bailando else (args.vqvae, args.gpt)
+        args.vqvae, args.gpt = vq_path, gpt_path
+        vq_state = strip_module(load_checkpoint(vq_path)['model'])
+        missing, unexpected = vqvae.load_state_dict(vq_state, strict=False)
+        assert not missing, f'VQ-VAE weights missing from {vq_path}: {missing[:5]}'
+        gpt_state = strip_module(load_checkpoint(gpt_path)['model'])
+        if args.bailando:
+            gpt_state = bailando_gpt_without_music(gpt_state, gpt_cfg.block_size)
+        gpt.load_state_dict(gpt_state, strict=True)
     return vqvae.eval(), gpt.eval(), vq_cfg, gpt_cfg
 
 
@@ -146,6 +193,7 @@ def main(argv=None):
     p.add_argument('--altlando-app', required=True, help='dance-ai-research-project/src/bailandopp/app')
     p.add_argument('--vqvae', help='VQ-VAE checkpoint (e.g. weight/vqvae_lb.pt)')
     p.add_argument('--gpt', help='GPT checkpoint (e.g. weight/gpt_lb_l_240.pt)')
+    p.add_argument('--bailando', metavar='EXPERIMENTS', help="the original Bailando weights: the unzipped 'experiments' folder from Bailando's README")
     p.add_argument('--random', action='store_true', help='random weights instead of checkpoints (for testing)')
     p.add_argument('--tiny', action='store_true', help='with --random: a small version of the architecture')
     p.add_argument('--out', default='models/altlando')
@@ -154,8 +202,9 @@ def main(argv=None):
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--opset', type=int, default=17)
     args = p.parse_args(argv)
-    if not args.random and not (args.vqvae and args.gpt):
-        p.error('give --vqvae and --gpt, or --random')
+    if not args.random and not args.bailando and not (args.vqvae and args.gpt):
+        p.error('give --bailando, --vqvae and --gpt, or --random')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
     import numpy as np
     import torch
@@ -256,12 +305,31 @@ def main(argv=None):
     # ---- int8 weights, then split big files ------------------------------------------------------
     names = ('encoder', 'gpt', 'decoder')
     quant_note = None
+    reference_from = 'PyTorch (= onnxruntime)'
     if args.quantize:
         for name in names:
             quantize_weights(os.path.join(args.out, f'{name}.onnx'))
-        dec8 = ort.InferenceSession(os.path.join(args.out, 'decoder.onnx'))
+        # as the browser runs them: weights dequantised, arithmetic in float32 (onnxruntime's CPU build
+        # would otherwise fuse DequantizeLinear + MatMul into integer kernels that round differently)
+        so = ort.SessionOptions()
+        so.add_session_config_entry('session.disable_quant_qdq', '1')
+        dec8 = ort.InferenceSession(os.path.join(args.out, 'decoder.onnx'), so)
         (p8,) = dec8.run(None, {'codes_up': np.array([seq_u], dtype=np.int64), 'codes_down': np.array([seq_d], dtype=np.int64)})
         quant_note = float(np.abs(p8[0] - ref_pose).mean() / max(1e-9, np.abs(ref_pose).mean()))
+        # the reference the browser is checked against: what the int8 graphs themselves give
+        enc8 = ort.InferenceSession(os.path.join(args.out, 'encoder.onnx'), so)
+        step8 = ort.InferenceSession(os.path.join(args.out, 'gpt.onnx'), so)
+        cu8, cd8 = enc8.run(None, {'pose': x[None].astype(np.float32)})
+        seq_u, seq_d = [int(v) for v in cu8[0, :SHIFT]], [int(v) for v in cd8[0, :SHIFT]]
+        for _ in range(SHIFT):
+            wu, wd = seq_u[-block:], seq_d[-block:]
+            k = len(wu)
+            pad = [0] * (block - k)
+            nu, nd = step8.run(None, {'codes_up': np.array([wu + pad], dtype=np.int64), 'codes_down': np.array([wd + pad], dtype=np.int64)})
+            seq_u.append(int(nu[0, k - 1])); seq_d.append(int(nd[0, k - 1]))
+        (ref_pose,) = dec8.run(None, {'codes_up': np.array([seq_u], dtype=np.int64), 'codes_down': np.array([seq_d], dtype=np.int64)})
+        ref_pose = ref_pose[0]
+        reference_from = 'onnxruntime (int8 weights, float32 arithmetic)'
     sizes, files = {}, {}
     part = int(args.part_mb * 1e6)
     for name in names:
@@ -285,18 +353,25 @@ def main(argv=None):
             files[name] = f'{name}.onnx'
     manifest = {
         'format': 'kinesphere-altlando-onnx', 'version': 1,
-        'model': 'Altlando (random weights, for testing)' if args.random else 'Altlando',
+        'model': ('Altlando architecture (random weights, for testing)' if args.random
+                  else 'Bailando (original AIST++ weights) with Altlando\'s music-free GPT' if args.bailando else 'Altlando'),
+        'licence': 'Bailando weights: S-Lab License 1.0, non-commercial use (see LICENSE-BAILANDO)' if args.bailando else None,
         'tiny': bool(args.tiny), 'precision': 'int8' if args.quantize else 'fp32',
         'fps': 60, 'joints': 24, 'codeFrames': CODE_FRAMES, 'blockSize': block, 'shift': SHIFT, 'length': SHIFT, 'padTo': 5,
         'vocabUp': gpt_cfg.base['vocab_size_up'], 'vocabDown': gpt_cfg.base['vocab_size_down'],
         'files': files, 'bytes': sizes,
-        'source': 'https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1)',
-        'checkpoints': None if args.random else [os.path.basename(args.vqvae), os.path.basename(args.gpt)],
+        'source': 'https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1)'
+                  + ('; weights https://github.com/lisiyao21/Bailando (experiments/sep_vqvae_root epoch 500, cc_motion_gpt epoch 400)' if args.bailando else ''),
+        'checkpoints': None if args.random else [os.path.relpath(args.vqvae, args.bailando or '.'), os.path.relpath(args.gpt, args.bailando or '.')],
     }
+    if args.bailando:  # the S-Lab License asks binary redistributions to carry it
+        lic = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'LICENSE-BAILANDO')
+        with open(lic) as src, open(os.path.join(args.out, 'LICENSE-BAILANDO'), 'w') as dst:
+            dst.write(src.read())
     with open(os.path.join(args.out, 'altlando.json'), 'w') as f:
         json.dump(manifest, f, indent=2)
     with open(os.path.join(args.out, 'reference.json'), 'w') as f:
-        json.dump({'payload': np.round(payload, 6).tolist(), 'codesUp': seq_u, 'codesDown': seq_d,
+        json.dump({'from': reference_from, 'payload': np.round(payload, 6).tolist(), 'codesUp': seq_u, 'codesDown': seq_d,
                    'rawPose': np.round(ref_pose, 6).tolist()}, f)
     total = sum(sizes.values()) / 1e6
     if quant_note is not None:
