@@ -1,4 +1,4 @@
-# AI dance partner: a music-free Bailando in the browser
+# AI dance partner: Altlando and a music-free Bailando in the browser
 
 Kinesphere's AI partner is **Altlando** (Jiazhi Zhou, *Interactive AI Dancer*, University of
 Auckland, 2025): Bailando (Siyao et al., CVPR 2022) with the music condition removed from the GPT
@@ -10,26 +10,28 @@ motion capture database. The model code is in
 [`feat/remove-music-condition`](https://github.com/jzho987/Bailando/tree/feat/remove-music-condition)
 branch of jzho987/Bailando (`models/cross_cond_gpt2_nm.py`).
 
-**What Kinesphere bundles.** Altlando's trained weights aren't public, so `models/altlando/` holds
-the **original Bailando weights** (released with the paper, trained on AIST++, 512 pose codes per
-half of the body) with **Altlando's music removal re-implemented**: the weights are loaded into
-Altlando's music-free GPT (`CrossCondGPT2NoMusic`). Bailando's GPT input is three token streams,
-music then upper then lower body, each with its own block of positions (`pos_emb` has 3 × 29
-rows) and the music tokens made from audio features by `cond_emb`. Without music the input is just
-the two body streams, so `cond_emb` is dropped and `pos_emb` keeps rows 29–57 (upper body) and
-58–86 (lower body); the attention masks go from a 3 × 3 to a 2 × 2 grid of causal blocks, and all
-other weights (embeddings, attention, MLPs, output heads, the whole VQ-VAE) carry over unchanged
-(`bailando_gpt_without_music` in `export_onnx.py`). Unlike Altlando, this GPT was never trained
-without music, so the music-free attention is new to it: in tests it answers varied or still
-movement with lively, dance-like replies, and steady repetitive movement can get a reply that
-settles into a held pose. Exporting Altlando's own weights with the same script (below) swaps
-them in.
+**What Kinesphere bundles.** Two exports of the same architecture, chosen with **Model** in the
+panel:
 
-The main README's *How the bundled Bailando weights differ from Altlando's* compares the two
+* `models/altlando/` (the default): **Altlando's trained weights** (`vqvae_lb.pt`, `gpt_lb.pt`),
+  2048 pose codes per half of the body, trained without music on AIST++, FineDance and CMU.
+* `models/bailando/`: the **original Bailando weights** (released with the paper, trained on
+  AIST++, 512 pose codes per half) with **Altlando's music removal re-implemented**: the weights are
+  loaded into Altlando's music-free GPT (`CrossCondGPT2NoMusic`). Bailando's GPT input is three
+  token streams, music then upper then lower body, each with its own block of positions (`pos_emb`
+  has 3 × 29 rows) and the music tokens made from audio features by `cond_emb`. Without music the
+  input is just the two body streams, so `cond_emb` is dropped and `pos_emb` keeps rows 29–57
+  (upper body) and 58–86 (lower body); the attention masks go from a 3 × 3 to a 2 × 2 grid of
+  causal blocks, and all other weights (embeddings, attention, MLPs, output heads, the whole
+  VQ-VAE) carry over unchanged (`bailando_gpt_without_music` in `export_onnx.py`). Unlike
+  Altlando, this GPT was never trained without music.
+
+The main README's *How Altlando's weights differ from Bailando's* compares the two
 (vocabulary, training data, training, context length, and the thesis's results).
 
 The Bailando weights are © 2022 S-Lab under the S-Lab License 1.0 (`LICENSE-BAILANDO`, copied next
-to the model by the export): non-commercial use and redistribution only.
+to the model by the export): non-commercial use and redistribution only. Altlando's weights are
+the research team's, shared for this project (non-commercial research use).
 
 Kinesphere runs the model in the browser, with no server:
 
@@ -39,11 +41,11 @@ Kinesphere runs the model in the browser, with no server:
 | `js/altlando-worker.js` | runs them with ONNX Runtime Web 1.22 in a Web Worker: the GPT on WebGPU when available, the VQ-VAE on WebAssembly |
 | `js/altlando.js` | promise API over the worker |
 | `js/ai-partner.js` | converts your pose to SMPL joints and back, schedules and cross-fades replies |
-| `models/altlando/` | the bundled, exported model |
+| `models/altlando/`, `models/bailando/` | the bundled, exported models (Altlando is the default) |
 
 ## Exporting the model
 
-The bundled model (original Bailando weights, music removed):
+Bailando (original weights, music removed; `models/bailando/`):
 
 ```sh
 pip install --index-url https://download.pytorch.org/whl/cpu torch
@@ -52,14 +54,14 @@ git clone https://github.com/jzho987/dance-ai-research-project
 # experiments.zip from Bailando's README (Google Drive), unzipped
 python3 ai-partner/export_onnx.py \
     --altlando-app dance-ai-research-project/src/bailandopp/app \
-    --bailando experiments --quantize --out models/altlando
+    --bailando experiments --quantize --out models/bailando
 ```
 
 It uses `experiments/sep_vqvae_root/ckpt/epoch_500.pt` and `experiments/cc_motion_gpt/ckpt/epoch_400.pt`
 (the GPT before Bailando's music-specific actor-critic fine-tuning). Checkpoints are read with
 `safe_load.py`, which refuses anything in the pickle but tensors, storages and plain containers.
 
-Altlando's own trained weights, when available:
+Altlando's trained weights (`models/altlando/`):
 
 ```sh
 pip install --index-url https://download.pytorch.org/whl/cpu torch
@@ -67,7 +69,7 @@ pip install -r ai-partner/requirements-export.txt
 git clone https://github.com/jzho987/dance-ai-research-project
 python3 ai-partner/export_onnx.py \
     --altlando-app dance-ai-research-project/src/bailandopp/app \
-    --vqvae path/to/vqvae_lb.pt --gpt path/to/gpt_lb_l_240.pt \
+    --vqvae path/to/vqvae_lb.pt --gpt path/to/gpt_lb.pt \
     --quantize --out models/altlando
 ```
 
@@ -124,8 +126,10 @@ proportions.
 
 ## Known limits
 
-* The bundled GPT is Bailando's, trained with music; it runs without it here (see above).
-  Altlando's retrained weights would replace it with the same export.
+* The Bailando GPT was trained with music; it runs without it here (see above). Altlando's was
+  trained without, which is why it is the default.
+* Only Altlando's 29-code (3.7 s) version is bundled; the thesis's 45-code (6 s) version would need
+  the export and the browser runtime to take a longer window (they assume 28 + 1 codes).
 * Without WebGPU the CPU is slower than real time: about 12 s per reply on a 4-core virtual
   machine with one thread (GitHub Pages can't enable the multi-threaded WebAssembly build, which
   needs cross-origin isolation headers), so the partner pauses between replies.

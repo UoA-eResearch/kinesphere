@@ -4,7 +4,13 @@
 //   const { backend, manifest } = await model.load({ base: 'models/altlando/' });   // or { files }
 //   const frames = await model.generate(inputFrames, 28); // 224 Float32Array(72) in, 448 out
 
-export const DEFAULT_MODEL_URL = 'models/altlando/';
+/** The models bundled with the site. Altlando is the default. */
+export const MODELS = {
+  altlando: { url: 'models/altlando/', label: 'Altlando', title: 'Altlando (Zhou 2025): Bailando retrained without music on AIST++, FineDance and CMU motion capture' },
+  bailando: { url: 'models/bailando/', label: 'Bailando', title: 'Bailando (Siyao et al. 2022): the original AIST++ weights, with the music input removed' },
+};
+export const DEFAULT_MODEL = 'altlando';
+export const DEFAULT_MODEL_URL = MODELS[DEFAULT_MODEL].url;
 
 export function createAltlando({ onProgress = () => {} } = {}) {
   let worker = null, nextId = 1, loaded = null;

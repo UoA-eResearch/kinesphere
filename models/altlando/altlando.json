@@ -1,8 +1,8 @@
 {
   "format": "kinesphere-altlando-onnx",
   "version": 1,
-  "model": "Bailando (original AIST++ weights) with Altlando's music-free GPT",
-  "licence": "Bailando weights: S-Lab License 1.0, non-commercial use (see LICENSE-BAILANDO)",
+  "model": "Altlando (Zhou 2025)",
+  "licence": null,
   "tiny": false,
   "precision": "int8",
   "fps": 60,
@@ -12,8 +12,8 @@
   "shift": 28,
   "length": 28,
   "padTo": 5,
-  "vocabUp": 512,
-  "vocabDown": 512,
+  "vocabUp": 2048,
+  "vocabDown": 2048,
   "files": {
     "encoder": "encoder.onnx",
     "gpt": [
@@ -27,13 +27,22 @@
     ]
   },
   "bytes": {
-    "encoder": 27180338,
-    "gpt": 90094907,
-    "decoder": 42903362
+    "encoder": 33471798,
+    "gpt": 101906751,
+    "decoder": 49194822
   },
-  "source": "https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1); weights https://github.com/lisiyao21/Bailando (experiments/sep_vqvae_root epoch 500, cc_motion_gpt epoch 400)",
+  "sha256": {
+    "encoder": "9d561f5d1dd8dea0d8e7f6b0d97f630851a068ac52417816b3d1af81c3397b51",
+    "gpt": "2dd21f2fcb4749115a1c5e36c86c7bec5ab767c31755768d3387f5e60daa69d5",
+    "decoder": "da6f46ce5fb76ebf35cbce1dc694514d127b0c9e728295c4e032010b3f2cc5e1"
+  },
+  "source": "https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1)",
   "checkpoints": [
-    "sep_vqvae_root/ckpt/epoch_500.pt",
-    "cc_motion_gpt/ckpt/epoch_400.pt"
-  ]
+    "vqvae_lb.pt",
+    "gpt_lb.pt"
+  ],
+  "epochs": {
+    "vqvae": 500,
+    "gpt": 180
+  }
 }

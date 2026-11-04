@@ -33,15 +33,15 @@ Usage
     # music removed, int8, split for GitHub
     python3 ai-partner/export_onnx.py \\
         --altlando-app dance-ai-research-project/src/bailandopp/app \\
-        --bailando experiments --quantize --out models/altlando
+        --bailando experiments --quantize --out models/bailando
 
     # trained Altlando weights
     python3 ai-partner/export_onnx.py \\
         --altlando-app dance-ai-research-project/src/bailandopp/app \\
-        --vqvae weight/vqvae_lb.pt --gpt weight/gpt_lb_l_240.pt \\
+        --vqvae weight/vqvae_lb.pt --gpt weight/gpt_lb.pt \\
         --out models/altlando
 
-    # the version Kinesphere bundles in models/altlando (int8 weights, files split for GitHub)
+    # Altlando as Kinesphere bundles it in models/altlando (int8 weights, files split for GitHub)
     python3 ai-partner/export_onnx.py ... --quantize --out models/altlando
 
     # the same architecture with random weights, small, for testing the pipeline
@@ -49,6 +49,7 @@ Usage
 """
 import argparse
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -178,13 +179,16 @@ def build(args):
         vq_path, gpt_path = (os.path.join(args.bailando, 'sep_vqvae_root', 'ckpt', 'epoch_500.pt'),
                              os.path.join(args.bailando, 'cc_motion_gpt', 'ckpt', 'epoch_400.pt')) if args.bailando else (args.vqvae, args.gpt)
         args.vqvae, args.gpt = vq_path, gpt_path
-        vq_state = strip_module(load_checkpoint(vq_path)['model'])
+        vq_ck = load_checkpoint(vq_path)
+        vq_state = strip_module(vq_ck['model'])
         missing, unexpected = vqvae.load_state_dict(vq_state, strict=False)
         assert not missing, f'VQ-VAE weights missing from {vq_path}: {missing[:5]}'
-        gpt_state = strip_module(load_checkpoint(gpt_path)['model'])
+        gpt_ck = load_checkpoint(gpt_path)
+        gpt_state = strip_module(gpt_ck['model'])
         if args.bailando:
             gpt_state = bailando_gpt_without_music(gpt_state, gpt_cfg.block_size)
         gpt.load_state_dict(gpt_state, strict=True)
+        args.epochs = {'vqvae': vq_ck.get('epoch'), 'gpt': gpt_ck.get('epoch')}
     return vqvae.eval(), gpt.eval(), vq_cfg, gpt_cfg
 
 
@@ -192,11 +196,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     p.add_argument('--altlando-app', required=True, help='dance-ai-research-project/src/bailandopp/app')
     p.add_argument('--vqvae', help='VQ-VAE checkpoint (e.g. weight/vqvae_lb.pt)')
-    p.add_argument('--gpt', help='GPT checkpoint (e.g. weight/gpt_lb_l_240.pt)')
+    p.add_argument('--gpt', help='GPT checkpoint (e.g. weight/gpt_lb.pt)')
     p.add_argument('--bailando', metavar='EXPERIMENTS', help="the original Bailando weights: the unzipped 'experiments' folder from Bailando's README")
     p.add_argument('--random', action='store_true', help='random weights instead of checkpoints (for testing)')
     p.add_argument('--tiny', action='store_true', help='with --random: a small version of the architecture')
-    p.add_argument('--out', default='models/altlando')
+    p.add_argument('--out', required=True, help='e.g. models/altlando or models/bailando')
     p.add_argument('--quantize', action='store_true', help='int8 weights (about a third of the size; what the site bundles)')
     p.add_argument('--part-mb', type=float, default=40, help='split files bigger than this into parts (GitHub refuses files over 100 MB)')
     p.add_argument('--seed', type=int, default=0)
@@ -330,7 +334,7 @@ def main(argv=None):
         (ref_pose,) = dec8.run(None, {'codes_up': np.array([seq_u], dtype=np.int64), 'codes_down': np.array([seq_d], dtype=np.int64)})
         ref_pose = ref_pose[0]
         reference_from = 'onnxruntime (int8 weights, float32 arithmetic)'
-    sizes, files = {}, {}
+    sizes, files, hashes = {}, {}, {}
     part = int(args.part_mb * 1e6)
     for name in names:
         path = os.path.join(args.out, f'{name}.onnx')
@@ -338,6 +342,8 @@ def main(argv=None):
             if old.startswith(f'{name}.onnx.part'):
                 os.remove(os.path.join(args.out, old))
         sizes[name] = os.path.getsize(path)
+        with open(path, 'rb') as f:
+            hashes[name] = hashlib.sha256(f.read()).hexdigest()
         if sizes[name] > part:
             with open(path, 'rb') as f:
                 data = f.read()
@@ -351,18 +357,22 @@ def main(argv=None):
             files[name] = parts
         else:
             files[name] = f'{name}.onnx'
+    epochs = getattr(args, 'epochs', None)
     manifest = {
         'format': 'kinesphere-altlando-onnx', 'version': 1,
         'model': ('Altlando architecture (random weights, for testing)' if args.random
-                  else 'Bailando (original AIST++ weights) with Altlando\'s music-free GPT' if args.bailando else 'Altlando'),
+                  else 'Bailando (original AIST++ weights) with Altlando\'s music-free GPT' if args.bailando else 'Altlando (Zhou 2025)'),
         'licence': 'Bailando weights: S-Lab License 1.0, non-commercial use (see LICENSE-BAILANDO)' if args.bailando else None,
         'tiny': bool(args.tiny), 'precision': 'int8' if args.quantize else 'fp32',
         'fps': 60, 'joints': 24, 'codeFrames': CODE_FRAMES, 'blockSize': block, 'shift': SHIFT, 'length': SHIFT, 'padTo': 5,
         'vocabUp': gpt_cfg.base['vocab_size_up'], 'vocabDown': gpt_cfg.base['vocab_size_down'],
-        'files': files, 'bytes': sizes,
+        'files': files, 'bytes': sizes, 'sha256': hashes,
         'source': 'https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1)'
                   + ('; weights https://github.com/lisiyao21/Bailando (experiments/sep_vqvae_root epoch 500, cc_motion_gpt epoch 400)' if args.bailando else ''),
-        'checkpoints': None if args.random else [os.path.relpath(args.vqvae, args.bailando or '.'), os.path.relpath(args.gpt, args.bailando or '.')],
+        'checkpoints': None if args.random else (
+            [os.path.relpath(args.vqvae, args.bailando), os.path.relpath(args.gpt, args.bailando)] if args.bailando
+            else [os.path.basename(args.vqvae), os.path.basename(args.gpt)]),
+        'epochs': epochs,
     }
     if args.bailando:  # the S-Lab License asks binary redistributions to carry it
         lic = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'LICENSE-BAILANDO')

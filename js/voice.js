@@ -77,6 +77,8 @@ export function parseCommand(text) {
   if (/^(help|voice help|commands|voice commands|what can i say|what (are|can) (the )?commands?( be)?|show (the )?commands)$/.test(t)) return { type: 'help:show' };
   if (/^(close|hide)( the)?( help| commands)?$|^got it$/.test(t)) return { type: 'help:hide' };
   // AI dance partner
+  if (/\b(bailando|bye lando|by lando)\b/.test(t) && !/\b(off|stop)\b/.test(t)) return { type: 'ai', value: 'bailando' };
+  if (/\b(alt ?lando|altando|old lando|all lando)\b/.test(t) && !/\b(off|stop)\b/.test(t)) return { type: 'ai', value: 'altlando' };
   if (/\b(ai|a i|robot|computer) (dance )?(partner|dancer)\b|^dance with me$|^(dance|partner) partner (on|off)$|^partner (on|off)$/.test(t)) {
     return { type: 'ai', value: !/\b(off|stop|end|quit|leave|disable|close|bye|goodbye|go away)\b/.test(t) };
   }
@@ -178,7 +180,7 @@ export const VOICE_HELP = [
   ['Sandman particles', [['“Blue sand”, “Colour pink”…', 'particle colour'], ['“Gravity up / down / off / 2”, “Float”', 'gravity'], ['“Longer trails” / “Decay 5 seconds”', 'decay time'], ['“More / less momentum”', 'momentum'], ['“Reset sand”', 'defaults']]],
   ['Tracking', [['“Two people”, “Just me”', 'how many people to track'], ['“Use MultiPose / Lite / Heavy / Holistic”', 'pose model']]],
   ['Game and pages', [['“Game”, “Sessions”, “Dashboard”, “Live”', 'go to a page'], ['“Play Sunrise / Neon / Rush”', 'start a song'], ['“Stop song”', 'back to the song list'], ['“Louder” / “Quieter” / “Mute”', 'music volume']]],
-  ['AI partner', [['“AI partner” / “Dance with me”', 'start the AI dance partner'], ['“AI partner off” / “Stop AI partner”', 'stop it']]],
+  ['AI partner', [['“AI partner” / “Dance with me”', 'start the AI dance partner'], ['“Use Altlando” / “Use Bailando”', 'choose its model'], ['“AI partner off” / “Stop AI partner”', 'stop it']]],
   ['Dance together', [['“Invite” / “Dance together”', 'create an invite link'], ['“Leave session”', 'leave or end the online session']]],
   ['Voice', [['“Help” / “What can I say”', 'show this list'], ['“Close”', 'hide it'], ['“Stop listening”', 'turn voice control off']]],
 ];

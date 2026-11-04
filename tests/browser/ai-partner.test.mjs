@@ -7,6 +7,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openApp, startCameraWithDancer, importSession, CAMERA_ARGS, ROOT } from '../helpers/browser.mjs';
 import { phasesSession, serialize } from '../helpers/synth.mjs';
+import { smplSequence } from '../../js/ai-partner.js';
+import { FRAME_SIZE, WORLD_SIZE } from '../../js/pose.js';
+
+/** 224 frames of a synthetic dancer (arms at 45 deg, then raising them), as Kinesphere sends them to the model. */
+function humanInput() {
+  const s = phasesSession(1), frames = [];
+  for (let i = 400; i < 540; i++) frames.push({ t: s.times[i], lm: s.lm.subarray(i * FRAME_SIZE, (i + 1) * FRAME_SIZE), world: s.world.subarray(i * WORLD_SIZE, (i + 1) * WORLD_SIZE) });
+  return smplSequence(frames, 16 / 9).slice(0, 224);
+}
 
 const test = (name, fn) => baseTest(name, { timeout: 120000 }, fn);
 const MODEL = 'test-results/altlando-tiny/';
@@ -55,28 +64,70 @@ test('in the browser, the model gives exactly what PyTorch gives', async () => {
   assert.ok(Math.abs(out.root[1] - flat[0]) < 1e-4, 'and moves by the decoded root velocity');
 });
 
-test('the bundled model (Bailando, music removed) loads from models/altlando/ and matches onnxruntime', async () => {
-  const ref = JSON.parse(fs.readFileSync(path.join(ROOT, 'models/altlando/reference.json'), 'utf8'));
-  const out = await app.page.evaluate(async payload => {
-    const { createAltlando, DEFAULT_MODEL_URL } = await import('/js/altlando.js');
+for (const [name, folder, check] of [['Altlando', 'models/altlando/', /Altlando/], ['Bailando (music removed)', 'models/bailando/', /Bailando/]]) {
+  test(`the bundled ${name} model loads from ${folder} and matches onnxruntime`, async () => {
+    const ref = JSON.parse(fs.readFileSync(path.join(ROOT, folder, 'reference.json'), 'utf8'));
+    const out = await app.page.evaluate(async ({ base, payload, human }) => {
+      const { createAltlando } = await import('/js/altlando.js');
+      const model = createAltlando();
+      const info = await model.load({ base });
+      const frames = await model.generate(payload.map(f => Float32Array.from(f)), 28);
+      // a reply to a (synthetic) dancer: the generated half should still be a human body
+      const reply = await model.generate(human.map(f => Float32Array.from(f)), 28);
+      model.terminate();
+      const P = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21];
+      const bones = reply.slice(224).map(f => P.map((p, i) => (p < 0 ? 0 : Math.hypot(f[i * 3] - f[p * 3], f[i * 3 + 1] - f[p * 3 + 1], f[i * 3 + 2] - f[p * 3 + 2]))));
+      return { model: info.manifest.model, vocab: info.manifest.vocabUp, n: frames.length, codesUp: frames.codesUp, codesDown: frames.codesDown, raw: Array.from(frames.raw), thigh: bones.map(b => b[4]), shin: bones.map(b => b[7]) };
+    }, { base: `/${folder}`, payload: ref.payload, human: humanInput() });
+    assert.match(out.model, check);
+    assert.equal(out.vocab, name === 'Altlando' ? 2048 : 512);
+    assert.equal(out.n, 448);
+    assert.deepEqual(out.codesUp, ref.codesUp);
+    assert.deepEqual(out.codesDown, ref.codesDown);
+    const flat = ref.rawPose.flat();
+    let err = 0;
+    for (let i = 0; i < flat.length; i++) err = Math.max(err, Math.abs(out.raw[i] - flat[i]));
+    assert.ok(err < 1e-3, `decoded pose differs by ${err}`);
+    const range = a => `${Math.min(...a).toFixed(2)}..${Math.max(...a).toFixed(2)} m`;
+    assert.ok(out.thigh.every(l => l > 0.25 && l < 0.6), `thigh length ${range(out.thigh)}`);
+    assert.ok(out.shin.every(l => l > 0.25 && l < 0.6), `shin length ${range(out.shin)}`);
+  });
+}
+
+test('Altlando is the default model, and Bailando can be chosen', async () => {
+  const { page } = app;
+  // a fresh page without ?ai=, so the default applies
+  const ctx = page.context();
+  const p2 = await ctx.newPage();
+  await p2.goto(new URL('/', page.url()).href, { waitUntil: 'networkidle' });
+  await p2.evaluate(() => { document.querySelector('#ai-panel').hidden = false; document.querySelector('.ai-advanced').open = true; });
+  assert.equal(await p2.$eval('#ai-choice', s => s.value), 'altlando');
+  assert.equal(await p2.inputValue('#ai-model'), 'models/altlando/');
+  await p2.selectOption('#ai-choice', 'bailando');
+  assert.equal(await p2.inputValue('#ai-model'), 'models/bailando/');
+  assert.equal(await p2.evaluate(() => localStorage.getItem('kinesphere:aiChoice')), 'bailando');
+  await p2.reload({ waitUntil: 'networkidle' });
+  assert.equal(await p2.$eval('#ai-choice', s => s.value), 'bailando', 'remembered');
+  await p2.evaluate(() => { document.querySelector('#ai-panel').hidden = false; });
+  await p2.selectOption('#ai-choice', 'altlando');
+  await p2.close();
+});
+
+test('a stale cached model file is replaced, not used', async () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(MODEL_DIR, 'altlando.json'), 'utf8'));
+  const ok = await app.page.evaluate(async ({ base, sha }) => {
+    // a wrong copy of the encoder already in the cache, under this exact version's key
+    const url = new URL('encoder.onnx', new URL(base, location.href)).href;
+    const cache = await caches.open('kinesphere-models');
+    await cache.put(`${url}?v=${sha}`, new Response(new Uint8Array(1000)));
+    const { createAltlando } = await import('/js/altlando.js');
     const model = createAltlando();
-    const info = await model.load({ base: DEFAULT_MODEL_URL });
-    const frames = await model.generate(payload.map(f => Float32Array.from(f)), 28);
+    await model.load({ base });
     model.terminate();
-    // bone lengths of the generated half, to check it is still a human body
-    const P = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21];
-    const bones = frames.slice(224).map(f => P.map((p, i) => (p < 0 ? 0 : Math.hypot(f[i * 3] - f[p * 3], f[i * 3 + 1] - f[p * 3 + 1], f[i * 3 + 2] - f[p * 3 + 2]))));
-    return { model: info.manifest.model, n: frames.length, codesUp: frames.codesUp, codesDown: frames.codesDown, raw: Array.from(frames.raw), thigh: bones.map(b => b[4]) };
-  }, ref.payload);
-  assert.match(out.model, /Bailando/);
-  assert.equal(out.n, 448);
-  assert.deepEqual(out.codesUp, ref.codesUp);
-  assert.deepEqual(out.codesDown, ref.codesDown);
-  const flat = ref.rawPose.flat();
-  let err = 0;
-  for (let i = 0; i < flat.length; i++) err = Math.max(err, Math.abs(out.raw[i] - flat[i]));
-  assert.ok(err < 1e-3, `decoded pose differs by ${err}`);
-  assert.ok(out.thigh.every(l => l > 0.25 && l < 0.6), `thigh length ${Math.min(...out.thigh)}..${Math.max(...out.thigh)} m`);
+    const fixed = await cache.match(`${url}?v=${sha}`);
+    return (await fixed.arrayBuffer()).byteLength;
+  }, { base: `/${MODEL}`, sha: manifest.sha256.encoder });
+  assert.equal(ok, manifest.bytes.encoder, 'the cache now holds the right file');
 });
 
 test('the AI partner button starts it: it watches for 3.7 s, then dances a reply beside you', async () => {
@@ -85,7 +136,7 @@ test('the AI partner button starts it: it watches for 3.7 s, then dances a reply
   await page.click('#btn-ai');
   assert.ok(await page.isVisible('#ai-panel'));
   await waitStatus(page, /Watching you dance/);
-  await waitStatus(page, /Dancing a reply/, 60000);
+  await waitStatus(page, /dancing a reply/, 60000);
   assert.match(await status(page), /random weights/, 'says when the model is only a test model');
   const partner = await page.evaluate(() => {
     const r = window.__state.mp.remotes.get('ai-partner');
@@ -117,7 +168,7 @@ test('stop removes the partner; starting again reuses the loaded model', async (
   await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => window.__state.mp.remotes.has('ai-partner')), false);
   await page.click('#ai-toggle');
-  await waitStatus(page, /Watching you dance|Thinking|Dancing/, 5000);
+  await waitStatus(page, /Watching you dance|thinking|dancing/, 5000);
   await page.click('#ai-toggle');
 });
 
@@ -127,7 +178,7 @@ test('model files chosen on this computer work too', async () => {
   const names = ['altlando.json', ...Object.values(manifest.files).flat()];
   await page.click('.ai-advanced summary');
   await page.setInputFiles('#ai-files', names.map(n => path.join(MODEL_DIR, n)));
-  await waitStatus(page, /Watching you dance|Thinking|Dancing/);
+  await waitStatus(page, /Watching you dance|thinking|dancing/);
   assert.match(await page.inputValue('#ai-model'), /files chosen/);
   await page.click('#ai-toggle');
 });

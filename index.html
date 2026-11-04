@@ -109,7 +109,7 @@
           <select id="sel-people" aria-label="Number of people to track"></select>
         </label>
         <button id="btn-mp" class="btn btn-sm" aria-expanded="false" aria-controls="mp-panel" title="Invite someone to dance with you online: you see each other's avatars">👥 Dance together</button>
-        <button id="btn-ai" class="btn btn-sm" aria-expanded="false" aria-pressed="false" aria-controls="ai-panel" title="Dance with an AI partner that answers your movement (Bailando without music, running in your browser)">🤖 AI partner</button>
+        <button id="btn-ai" class="btn btn-sm" aria-expanded="false" aria-pressed="false" aria-controls="ai-panel" title="Dance with an AI partner that answers your movement (Altlando or Bailando, running in your browser)">🤖 AI partner</button>
         <button id="btn-voice" class="btn btn-sm voice-btn" aria-pressed="false" title="Change settings hands-free by speaking (M). Say “help” for the list of commands." hidden>🎤 Voice control</button>
         <button id="btn-help" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="help-panel" title="Help: models, people and overlay styles">?</button>
       </div>
@@ -134,15 +134,23 @@
       <section id="mp-panel" class="mp-panel" aria-label="Dance together online" hidden></section>
       <section id="ai-panel" class="mp-panel ai-panel" aria-label="AI dance partner" hidden>
         <h3>AI dance partner</h3>
-        <p>An AI dancer that watches the last few seconds of your movement and dances a reply beside you, again and again as you dance. It is Bailando (Siyao et al., 2022), trained on the AIST++ street and jazz dance dataset, with its music input removed as in Jay Zhou’s Altlando (2025), so it answers your movement alone. It runs here in your browser: nothing is sent anywhere. The first start downloads the model (160 MB, kept for next time); it is much faster in a browser with WebGPU (Chrome or Edge on a computer). Bailando’s weights are for non-commercial use (S-Lab License).</p>
+        <p>An AI dancer that watches the last few seconds of your movement and dances a reply beside you, again and again as you dance. It runs here in your browser: nothing is sent anywhere. The first start downloads the model (160–185 MB, kept for next time); it is much faster in a browser with WebGPU (Chrome or Edge on a computer).</p>
+        <p><b>Altlando</b> (Jay Zhou, 2025) was trained without music on more varied data (AIST++ and FineDance dance plus CMU everyday motion), with a larger pose vocabulary. <b>Bailando</b> (Siyao et al., 2022) is the model it grew from, with its original street and jazz dance weights and the music input removed. Both are for non-commercial research use.</p>
         <div class="ai-row">
+          <label class="select">Model
+            <select id="ai-choice" aria-label="AI partner model">
+              <option value="altlando">Altlando (Zhou 2025)</option>
+              <option value="bailando">Bailando (Siyao et al. 2022)</option>
+              <option value="custom">Another model (see Model files)</option>
+            </select>
+          </label>
           <button id="ai-toggle" class="btn btn-primary btn-sm" type="button">Start</button>
           <label class="check"><input type="checkbox" id="ai-mimic"> Show the model’s reading of my movement before each reply</label>
         </div>
         <p id="ai-status" class="ai-status" role="status" aria-live="polite">Off.</p>
         <details class="ai-advanced">
           <summary>Model files</summary>
-          <p class="fine">The model is loaded from <code>models/altlando/</code> on this site (exported with <code>ai-partner/export_onnx.py</code>, see the README) and kept in the browser for next time. To use another export, such as Altlando’s own trained weights, give its folder or choose its files.</p>
+          <p class="fine">The models are loaded from <code>models/altlando/</code> and <code>models/bailando/</code> on this site (exported with <code>ai-partner/export_onnx.py</code>, see the README) and kept in the browser for next time. To use another export, give its folder or choose its files.</p>
           <div class="ai-row">
             <label class="select ai-url">Folder <input id="ai-model" type="text" spellcheck="false" autocomplete="off" placeholder="models/altlando/" aria-label="Folder with the model files (altlando.json and the .onnx files)"></label>
             <label class="btn btn-sm ai-files" title="Use model files from this computer: altlando.json and the .onnx files (or their parts)">Choose files…<input id="ai-files" type="file" multiple accept=".onnx,.json,.part0,.part1,.part2,.part3,.part4,.part5" hidden></label>

@@ -1,0 +1,48 @@
+{
+  "format": "kinesphere-altlando-onnx",
+  "version": 1,
+  "model": "Bailando (original AIST++ weights) with Altlando's music-free GPT",
+  "licence": "Bailando weights: S-Lab License 1.0, non-commercial use (see LICENSE-BAILANDO)",
+  "tiny": false,
+  "precision": "int8",
+  "fps": 60,
+  "joints": 24,
+  "codeFrames": 8,
+  "blockSize": 29,
+  "shift": 28,
+  "length": 28,
+  "padTo": 5,
+  "vocabUp": 512,
+  "vocabDown": 512,
+  "files": {
+    "encoder": "encoder.onnx",
+    "gpt": [
+      "gpt.onnx.part0",
+      "gpt.onnx.part1",
+      "gpt.onnx.part2"
+    ],
+    "decoder": [
+      "decoder.onnx.part0",
+      "decoder.onnx.part1"
+    ]
+  },
+  "bytes": {
+    "encoder": 27180338,
+    "gpt": 90094907,
+    "decoder": 42903362
+  },
+  "sha256": {
+    "encoder": "146f3a89c649344de060a3c1b2e2c805f94f7e8b23359f3a8ed37a2b9db70d86",
+    "gpt": "97287e22d8c5c9d844831a6351de64bb0c00d96019217ec063b3e0d178088ac5",
+    "decoder": "15e27a820b28290516b212ca39be4840ba7da16637bb5cd326732c7eca846847"
+  },
+  "source": "https://github.com/jzho987/dance-ai-research-project (src/bailandopp/app/models_v1); weights https://github.com/lisiyao21/Bailando (experiments/sep_vqvae_root epoch 500, cc_motion_gpt epoch 400)",
+  "checkpoints": [
+    "sep_vqvae_root/ckpt/epoch_500.pt",
+    "cc_motion_gpt/ckpt/epoch_400.pt"
+  ],
+  "epochs": {
+    "vqvae": 500,
+    "gpt": 440
+  }
+}

@@ -18,7 +18,7 @@ import { parseCommand, createVoiceControl, voiceSupported, VOICE_HELP } from './
 import { SONGS } from './game-core.js';
 import { createSession, roomFromHash, inviteLink, MAX_GUESTS } from './multiplayer.js';
 import { createPartner, createUserConverter, landmarksFromSmpl, worldFromSmpl, smplSequence } from './ai-partner.js';
-import { createAltlando, DEFAULT_MODEL_URL } from './altlando.js';
+import { createAltlando, DEFAULT_MODEL_URL, DEFAULT_MODEL, MODELS } from './altlando.js';
 
 const $ = s => document.querySelector(s);
 const HOLD_MS = 1500;          // how long both hands must stay up to trigger start/stop
@@ -40,7 +40,8 @@ const SHOW_VALUES_KEY = 'kinesphere:showValues';
 const SPEED_VALUES_KEY = 'kinesphere:showSpeedValues';
 const SAND_KEY = 'kinesphere:sand';
 const BEND_KEY = 'kinesphere:bend';
-const AI_MODEL_KEY = 'kinesphere:aiModel';
+const AI_MODEL_KEY = 'kinesphere:aiModel'; // a custom model folder
+const AI_CHOICE_KEY = 'kinesphere:aiChoice'; // 'altlando', 'bailando' or 'custom'
 const AI_ID = 'ai-partner'; // the AI partner is drawn and recorded like an online dancer with this id
 const HELP_KEY = 'kinesphere:dashHelp';
 const VOICE_CONSENT_KEY = 'kinesphere:voiceConsent';
@@ -68,7 +69,7 @@ const ui = {
   sessionCount: $('#session-count'), btnImport: $('#btn-import'), fileImport: $('#file-import'),
   btnTheme: $('#btn-theme'), toast: $('#toast'),
   hudRecord: $('#hud-record'), hudStop: $('#hud-stop'), btnOverlay: $('#btn-overlay'), btnFullscreen: $('#btn-fullscreen'),
-  btnAi: $('#btn-ai'), aiPanel: $('#ai-panel'), aiModel: $('#ai-model'), aiFiles: $('#ai-files'), aiToggle: $('#ai-toggle'), aiMimic: $('#ai-mimic'), aiStatus: $('#ai-status'),
+  btnAi: $('#btn-ai'), aiPanel: $('#ai-panel'), aiChoice: $('#ai-choice'), aiModel: $('#ai-model'), aiFiles: $('#ai-files'), aiToggle: $('#ai-toggle'), aiMimic: $('#ai-mimic'), aiStatus: $('#ai-status'),
   btnMp: $('#btn-mp'), mpPanel: $('#mp-panel'), mpBadge: $('#mp-badge'), joinBox: $('#join-box'), joinName: $('#join-name'),
   btnVoice: $('#btn-voice'), btnVoiceHud: $('#btn-voice-hud'), voiceChip: $('#voice-chip'), voiceHelp: $('#voice-help'),
   bendControls: $('#bend-controls'), bendStrength: $('#bend-strength'), bendStrengthVal: $('#bend-strength-val'), bendReset: $('#bend-reset'),
@@ -2193,7 +2194,7 @@ async function startAiPartner() {
   stopAiPartner({ keepModel: true });
   const base = ui.aiModel.value.trim() || DEFAULT_MODEL_URL;
   ui.aiModel.value = ai.files ? ui.aiModel.value : base;
-  if (!ai.files) localStorage.setItem(AI_MODEL_KEY, base);
+  if (!ai.files && ui.aiChoice.value === 'custom') localStorage.setItem(AI_MODEL_KEY, base);
   const partner = createPartner({ generate: (frames, { length }) => ai.model.generate(frames, length), mimic: ui.aiMimic.checked, onStatus: () => renderAiStatus() });
   ai.partner = partner; // shown as starting while the model loads
   renderAiStatus();
@@ -2237,6 +2238,7 @@ function renderAiStatus() {
   const loaded = ai.model?.loaded;
   const where = loaded ? ` on ${loaded.backend}` : '';
   const testModel = loaded?.manifest?.model?.includes('random') ? ' This is a test model with random weights, so its dancing is meaningless.' : '';
+  const who = loaded?.manifest?.model ? loaded.manifest.model.replace(/ \(.*$/, '') : 'The partner';
   let text = 'Off.', error = false;
   if (ai.loadError && !on) {
     text = /no model at|not found/.test(ai.loadError)
@@ -2250,9 +2252,9 @@ function renderAiStatus() {
     if (info.status === 'error') { text = `The model failed: ${info.error}. Trying again…`; error = true; }
     else if (info.status === 'dancing') {
       const slow = info.latency > 2 * (info.need / 60) * 1000 && loaded?.backend !== 'WebGPU' ? ' That is slow here: a browser with WebGPU (Chrome or Edge on a computer) is much faster.' : '';
-      text = `Dancing a reply to your last ${(info.need / 60).toFixed(1)} s (${info.requests} so far; the model takes ${(info.latency / 1000).toFixed(1)} s${where}).${slow}${testModel}`;
+      text = `${who} is dancing a reply to your last ${(info.need / 60).toFixed(1)} s (${info.requests} so far; the model takes ${(info.latency / 1000).toFixed(1)} s${where}).${slow}${testModel}`;
     }
-    else if (info.status === 'thinking') text = `Thinking of a reply${where}…`;
+    else if (info.status === 'thinking') text = `${who} is thinking of a reply${where}…`;
     else if (!state.stream) text = 'Waiting for the camera: press Start camera.';
     else text = `Watching you dance… ${Math.round((100 * info.buffered) / info.need)}%`;
   } else if (on) text = 'Starting…';
@@ -2265,6 +2267,15 @@ function toggleAiPanel(open = ui.aiPanel.hidden) {
   ui.btnAi.setAttribute('aria-expanded', String(open));
 }
 
+/** Switch the partner's model ('altlando', 'bailando' or 'custom'); restarts it if it is dancing. */
+function setAiModel(choice) {
+  ui.aiChoice.value = choice;
+  localStorage.setItem(AI_CHOICE_KEY, choice);
+  if (MODELS[choice]) { ai.files = null; ui.aiModel.value = MODELS[choice].url; }
+  else ui.aiModel.value = localStorage.getItem(AI_MODEL_KEY) || ui.aiModel.value;
+  if (ai.partner) startAiPartner();
+}
+
 /** Model files chosen on this computer: altlando.json and the three .onnx files. */
 async function chooseAiFiles(list) {
   const files = {};
@@ -2272,12 +2283,20 @@ async function chooseAiFiles(list) {
   if (!files['altlando.json']) { ai.loadError = 'choose altlando.json together with the .onnx files'; renderAiStatus(); return; }
   ai.files = files;
   ui.aiModel.value = `(${list.length} files chosen)`;
+  ui.aiChoice.value = 'custom';
   startAiPartner();
 }
 
 function initAiPartner() {
+  // the model: Altlando unless another was chosen (remembered), or a folder given with ?ai=
   const fromLink = new URLSearchParams(location.search).get('ai');
-  ui.aiModel.value = fromLink || localStorage.getItem(AI_MODEL_KEY) || DEFAULT_MODEL_URL;
+  let choice = localStorage.getItem(AI_CHOICE_KEY);
+  if (!MODELS[choice] && choice !== 'custom') choice = DEFAULT_MODEL;
+  if (fromLink) choice = Object.keys(MODELS).find(k => MODELS[k].url === fromLink.replace(/^\.?\//, '')) ?? 'custom';
+  ui.aiChoice.value = choice;
+  ui.aiModel.value = fromLink || (choice === 'custom' ? localStorage.getItem(AI_MODEL_KEY) : null) || MODELS[choice]?.url || DEFAULT_MODEL_URL;
+  for (const [k, m] of Object.entries(MODELS)) ui.aiChoice.querySelector(`option[value="${k}"]`).title = m.title;
+  ui.aiChoice.addEventListener('change', () => setAiModel(ui.aiChoice.value));
   // one click: start the partner (and show its panel); click again to stop
   ui.btnAi.addEventListener('click', () => {
     if (ai.partner) { stopAiPartner(); return; }
@@ -2286,7 +2305,7 @@ function initAiPartner() {
   });
   ui.aiToggle.addEventListener('click', () => (ai.partner ? stopAiPartner() : startAiPartner()));
   ui.aiMimic.addEventListener('change', () => { if (ai.partner) startAiPartner(); });
-  ui.aiModel.addEventListener('input', () => { ai.files = null; });
+  ui.aiModel.addEventListener('input', () => { ai.files = null; ui.aiChoice.value = 'custom'; localStorage.setItem(AI_CHOICE_KEY, 'custom'); });
   ui.aiModel.addEventListener('keydown', e => { if (e.key === 'Enter') startAiPartner(); });
   ui.aiFiles.addEventListener('change', () => { if (ui.aiFiles.files?.length) chooseAiFiles([...ui.aiFiles.files]); ui.aiFiles.value = ''; });
   renderAiStatus();
@@ -2366,6 +2385,7 @@ function runVoiceCommand(cmd) {
   switch (cmd.type) {
     case 'voice:off': voice.disable(); return 'Voice control off';
     case 'ai':
+      if (typeof v === 'string') { toggleAiPanel(true); setAiModel(v); if (!ai.partner) startAiPartner(); return `AI partner: ${MODELS[v].label}`; }
       if (v) { toggleAiPanel(true); startAiPartner(); return 'AI partner on'; }
       if (!ai.partner) return 'The AI partner is not on';
       stopAiPartner();

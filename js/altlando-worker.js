@@ -24,11 +24,16 @@ let ort = null, sessions = null, manifest = null, backend = null;
 
 const post = (msg, transfer) => self.postMessage(msg, transfer ?? []);
 
-/** Fetch a model file, reporting progress, from the browser's cache when we have it. */
-async function fetchFile(url, onProgress) {
+/**
+ * Fetch a model file, reporting progress, from the browser's cache when we have it. `version`
+ * (the file's hash from the manifest) is part of the cache key, so a model replaced at the same
+ * address is downloaded again instead of mixed with the old one.
+ */
+async function fetchFile(url, onProgress, version = '', { useCache = true } = {}) {
   let cache = null;
   try { cache = await caches.open(CACHE); } catch { /* no Cache Storage (e.g. private window) */ }
-  let res = cache ? await cache.match(url) : null;
+  const key = version ? `${url}?v=${version}` : url;
+  let res = cache && useCache ? await cache.match(key) : null;
   const fromCache = Boolean(res);
   if (!res) {
     res = await fetch(url);
@@ -49,7 +54,7 @@ async function fetchFile(url, onProgress) {
   const buf = new Uint8Array(loaded);
   let o = 0;
   for (const c of chunks) { buf.set(c, o); o += c.length; }
-  if (cache && !fromCache && url.endsWith('.onnx')) cache.put(url, new Response(buf, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(loaded) } })).catch(() => {});
+  if (cache && !fromCache && version) cache.put(key, new Response(buf, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(loaded) } })).catch(() => {});
   return buf.buffer;
 }
 
@@ -73,17 +78,25 @@ async function load({ base, files }) {
   for (const [i, n] of names.entries()) {
     // a file, or a list of parts to join (the export splits big files: GitHub refuses files over 100 MB)
     const parts = [].concat(m.files[n]);
-    const got = [];
-    let before = 0;
-    for (const file of parts) {
-      const buf = files?.[file] ?? await fetchFile(new URL(file, root).href, l => {
-        loaded[i] = before + l;
-        post({ type: 'progress', loaded: loaded.reduce((a, b) => a + b, 0), total: totals.reduce((a, b) => a + b, 0) || 0, file });
-      });
-      if (!buf) throw new Error(`${file} is missing`);
-      got.push(new Uint8Array(buf));
-      before += buf.byteLength;
-    }
+    // cache only what the manifest identifies (its hash, or failing that its size)
+    const version = m.sha256?.[n] ?? (m.bytes?.[n] ? `${m.bytes[n]}b` : '');
+    const fetchAll = async useCache => {
+      const got = [];
+      let before = 0;
+      for (const file of parts) {
+        const buf = files?.[file] ?? await fetchFile(new URL(file, root).href, l => {
+          loaded[i] = before + l;
+          post({ type: 'progress', loaded: loaded.reduce((a, b) => a + b, 0), total: totals.reduce((a, b) => a + b, 0) || 0, file });
+        }, version, { useCache });
+        if (!buf) throw new Error(`${file} is missing`);
+        got.push(new Uint8Array(buf));
+        before += buf.byteLength;
+      }
+      return { got, before };
+    };
+    let { got, before } = await fetchAll(true);
+    if (m.bytes?.[n] && before !== m.bytes[n] && !files) ({ got, before } = await fetchAll(false)); // a stale or cut-off copy: fetch afresh
+    if (m.bytes?.[n] && before !== m.bytes[n]) throw new Error(`${n} is ${before} bytes, the manifest says ${m.bytes[n]}`);
     const whole = new Uint8Array(before);
     let o = 0;
     for (const g of got) { whole.set(g, o); o += g.length; }
