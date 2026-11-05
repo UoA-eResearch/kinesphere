@@ -683,9 +683,27 @@ function loop(now) {
     ).finally(() => { state.detecting = false; });
   }
   updateAiPartner(now);
-  // ~60 redraws a second is plenty; on 120-240 Hz screens drawing every refresh only adds GPU load
-  if (now - state.lastRender >= 1000 / 62) renderOverlay(now);
+  // ~60 redraws a second is plenty; on 120-240 Hz screens drawing every refresh only adds GPU load.
+  // The next frame is booked first, so a drawing error can't stop the camera, recording or partner.
   requestAnimationFrame(loop);
+  if (now - state.lastRender >= 1000 / 62) renderOverlay(now);
+}
+
+/**
+ * Run one dancer's overlay drawing. If a style throws on an unusual pose, the error is logged once
+ * (not every frame), the style's state is reset and the frame goes on without that dancer.
+ */
+const drawErrors = new WeakSet();
+function safeDraw(effect, draw, ctx = overlayCtx) {
+  ctx.save();
+  try {
+    draw();
+  } catch (err) {
+    if (!drawErrors.has(effect)) { drawErrors.add(effect); console.warn(`Overlay style ${effect.id ?? ''} failed on this pose; it was reset.`, err); }
+    try { effect.reset?.(); } catch { /* nothing more to do */ }
+  } finally {
+    ctx.restore();
+  }
 }
 
 /** Draw the overlay every animation frame so particle/trail styles stay smooth between detections. */
@@ -710,7 +728,7 @@ function renderOverlay(now) {
   if (state.liveViewer) state.liveViewer.setPeople(slots?.map(pose => pose && { lm: pose.lm, offset: 0 }) ?? null, minVis);
   state.effects.forEach((effect, p) => {
     const pose = slots?.[p] ?? null;
-    effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours, videoVisible: state.showVideo });
+    safeDraw(effect, () => effect.draw(overlayCtx, pose?.lm ?? null, 0, width, height, dt, { person: p, minVis, hands: pose?.hands ?? null, face: pose?.face ?? null, faceContours, videoVisible: state.showVideo }));
   });
   if (state.mp.remotes.size) drawRemoteDancers(width, height, dt, minVis);
   if (slots && state.detector.people > 1) {
@@ -1732,12 +1750,12 @@ function setupReplay(session, root, onTime, metrics = null) {
     for (let p = 0; p < people; p++) {
       const offset = frameOffset(session, Math.max(0, i), p);
       const visible = hasFrame && personPresent(lm, offset);
-      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false }); continue; }
+      if (!visible) { smoother.reset(p); handSmoother?.reset(p); poses3d[p] = null; safeDraw(effects[p], () => effects[p].draw(ctx, null, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false }), ctx); continue; }
       const tf = placement[p];
       const shown = smoother.apply(tf ? placeWith(tf, lm, offset) : lm, tf ? 0 : offset, p, dt);
       const hands = handSmoother ? handSmoother.apply(session.hands, handOffset(session, Math.max(0, i), p), p, dt) : null;
       poses3d[p] = { lm: shown, offset: 0 };
-      effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false, hands });
+      safeDraw(effects[p], () => effects[p].draw(ctx, shown, 0, w, h, dt, { mirror: mirrorView, minVis, person: p, videoVisible: false, hands }), ctx);
       if (session.slots?.[p]?.name) drawNameTag(shown, w, h, slotLabel(session, p, { online: false }), personColors(p).left, { ctx, mirror: mirrorView, flipText: false });
       else if (people > 1) drawPersonBadge(ctx, shown, 0, w, h, p, { mirror: mirrorView, minVis });
     }
@@ -2049,7 +2067,7 @@ function drawRemoteDancers(width, height, dt, minVis) {
       const shown = rem.smoothers.apply(placed, 0, p, dt);
       const colour = localPeople + k + p; // colours after the local dancers'
       rem.effects[p] ??= createEffect(state.styleId);
-      rem.effects[p].draw(overlayCtx, shown, 0, width, height, dt, { person: colour, minVis: Math.min(minVis, 0.4), videoVisible: state.showVideo });
+      safeDraw(rem.effects[p], () => rem.effects[p].draw(overlayCtx, shown, 0, width, height, dt, { person: colour, minVis: Math.min(minVis, 0.4), videoVisible: state.showVideo }));
       if (p === 0) drawNameTag(shown, width, height, rem.name, personColors(colour).left);
     });
   });

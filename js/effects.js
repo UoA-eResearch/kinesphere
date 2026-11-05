@@ -575,7 +575,7 @@ function sandmanStyle() {
             body.push([top[0] + (bot[0] - top[0]) * v, top[1] + (bot[1] - top[1]) * v]);
           }
           const hx = (vx[23] + vx[24]) / 2, hy = (vy[23] + vy[24]) / 2;
-          if (Math.random() < dt * 40) emit(body[body.length - 1][0], body[body.length - 1][1], hx, hy, (ax[23] + ax[24]) / 2, (ay[23] + ay[24]) / 2, 2);
+          if (body.length && Math.random() < dt * 40) emit(body[body.length - 1][0], body[body.length - 1][1], hx, hy, (ax[23] + ax[24]) / 2, (ay[23] + ay[24]) / 2, 2);
         }
         const head = neckAndHead(p, minVis);
         if (head) {
@@ -1039,7 +1039,9 @@ function fuzzyStyle() {
       const p = lm ? project(lm, offset, w, h, mirror) : null;
       if (p && [11, 12, 23, 24].every(i => p.v[i] >= minVis)) {
         const pc = personColors(person);
-        const T = Math.hypot((p.x[11] + p.x[12] - p.x[23] - p.x[24]) / 2, (p.y[11] + p.y[12] - p.y[23] - p.y[24]) / 2);
+        // (at least 2% of the picture: shoulders and hips on top of each other would otherwise make
+        // the blobs zero-sized and their count along each bone infinite)
+        const T = Math.max(h * 0.02, Math.hypot((p.x[11] + p.x[12] - p.x[23] - p.x[24]) / 2, (p.y[11] + p.y[12] - p.y[23] - p.y[24]) / 2));
         bctx.globalCompositeOperation = 'lighter';
         bctx.globalAlpha = Math.min(1, 0.2 * k * 6);
         const blob = (x, y, r, color) => bctx.drawImage(blobSprite(color), x - r, y - r, 2 * r, 2 * r);
@@ -1049,7 +1051,7 @@ function fuzzyStyle() {
           const color = isLeft(a) && isLeft(b) ? pc.left : !isLeft(a) && !isLeft(b) ? pc.right : pc.mid;
           const r = T * (a >= 23 ? 0.32 : 0.26);
           const len = Math.hypot(p.x[b] - p.x[a], p.y[b] - p.y[a]);
-          const n = Math.max(2, Math.ceil(len / (r * 0.5)));
+          const n = Math.min(200, Math.max(2, Math.ceil(len / (r * 0.5))));
           for (let i = 0; i <= n; i++) blob(p.x[a] + (p.x[b] - p.x[a]) * i / n, p.y[a] + (p.y[b] - p.y[a]) * i / n, r, color);
         }
         // torso and head in a blend of the two side colours, so they glow rather than burn white

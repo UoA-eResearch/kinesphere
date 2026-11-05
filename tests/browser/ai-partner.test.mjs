@@ -5,7 +5,7 @@ import { test as baseTest, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openApp, startCameraWithDancer, importSession, CAMERA_ARGS, ROOT } from '../helpers/browser.mjs';
+import { openApp, startCameraWithDancer, setDancer, importSession, CAMERA_ARGS, ROOT } from '../helpers/browser.mjs';
 import { phasesSession, serialize } from '../helpers/synth.mjs';
 import { smplSequence } from '../../js/ai-partner.js';
 import { FRAME_SIZE, WORLD_SIZE } from '../../js/pose.js';
@@ -146,6 +146,46 @@ test('the AI partner button starts it: it watches for 3.7 s, then dances a reply
   assert.equal(partner.name, 'AI partner');
   assert.ok(partner.age < 500 && partner.poses === 1);
   assert.ok(partner.lane > 0 && partner.lane < 1, `lane ${partner.lane}`);
+});
+
+test('a dancer partly out of frame, with the partner on: no drawing errors (the fitted-body styles used to throw)', async () => {
+  const { page } = app;
+  const before = app.errors.length;
+  const warnings = [];
+  const onConsole = m => { if (/failed on this pose/.test(m.text())) warnings.push(m.text()); };
+  page.on('console', onConsole); // the app catches a style's error and warns, so check for that too
+  // walks towards the camera and back: arms, legs and hips leave the picture, with flickering visibility
+  await setDancer(page, function (t) {
+    const lm = new Float32Array(132);
+    const s = 1 + 1.6 * (0.5 - 0.5 * Math.cos(t * 1.5));
+    const set = (k, x, y) => { const X = 0.5 + (x - 0.5) * s, Y = 0.25 + (y - 0.25) * s; lm[k * 4] = X; lm[k * 4 + 1] = Y; lm[k * 4 + 3] = X < 0 || X > 1 || Y < 0 || Y > 1 ? 0.25 + 0.3 * Math.abs(Math.sin(t * 7 + k)) : 0.97; };
+    const a = 1.4 + 1.2 * Math.sin(t * 2.4);
+    set(0, 0.5, 0.2); for (let k = 1; k <= 10; k++) set(k, 0.5 + (k % 2 ? 0.02 : -0.02), 0.19);
+    set(11, 0.56, 0.3); set(12, 0.44, 0.3); set(23, 0.545, 0.53); set(24, 0.455, 0.53);
+    set(13, 0.56 + 0.09 * Math.sin(a), 0.3 + 0.09 * Math.cos(a)); set(15, 0.56 + 0.17 * Math.sin(a), 0.3 + 0.17 * Math.cos(a));
+    set(14, 0.44 - 0.09 * Math.sin(a), 0.3 + 0.09 * Math.cos(a)); set(16, 0.44 - 0.17 * Math.sin(a), 0.3 + 0.17 * Math.cos(a));
+    set(25, 0.55, 0.7); set(27, 0.55, 0.87); set(26, 0.45, 0.7); set(28, 0.45, 0.87);
+    return lm;
+  });
+  // a slow computer (the bug needed under ~50 frames a second): slow the page's CPU down
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+  const fps = await page.evaluate(() => new Promise(r => { let n = 0; const t0 = performance.now(); const f = () => (++n, performance.now() - t0 < 1000 ? requestAnimationFrame(f) : r(n)); requestAnimationFrame(f); }));
+  try {
+    for (const style of ['pleats', 'animator']) {
+      await page.selectOption('#sel-style', style);
+      await page.waitForTimeout(5000);
+    }
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await cdp.detach();
+  }
+  console.log(`# frame rate when throttling started: ${fps} a second`);
+  await setDancer(page, swingingDancer);
+  page.off('console', onConsole);
+  assert.deepEqual(app.errors.slice(before), []);
+  assert.deepEqual(warnings, []);
+  assert.ok(await page.evaluate(() => performance.now() - window.__state.lastPeopleAt < 1000), 'the live view is still running');
 });
 
 test('the AI partner is recorded with you, and labelled in the dashboard', async () => {

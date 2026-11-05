@@ -31,6 +31,19 @@ describe('buildBody', () => {
     const J = joints(); J.v[23] = 0;
     assert.equal(buildBody(J), null);
   });
+  test('the rig stays stable at any frame rate (it used to swing to infinity below ~50 fps)', () => {
+    for (const fps of [120, 60, 30, 20, 10]) {
+      const rig = createRig();
+      let J, overshoot = 0;
+      for (let i = 0; i < fps * 2; i++) {
+        J = rig.update(joints(i < fps / 2 ? 0 : Math.PI / 2, i < fps / 2 ? 0 : 0.2), 1 / fps);
+        overshoot = Math.max(overshoot, J.x[23] - joints(0, 0.2).x[23]);
+      }
+      assert.ok([...J.x, ...J.y].every(Number.isFinite), `${fps} fps: finite`);
+      assert.ok(Math.abs(J.x[23] - joints(0, 0.2).x[23]) < 0.5, `${fps} fps: the hip settles on its target`);
+      assert.ok(overshoot < 0.5, `${fps} fps: no overshoot (${overshoot})`);
+    }
+  });
   test('the rig smooths a jump in a joint instead of snapping to it', () => {
     const rig = createRig();
     for (let i = 0; i < 30; i++) rig.update(joints(), 1 / 60);

@@ -46,7 +46,8 @@ Weber, Brenda San Germán Bravo and Maxine Yang (see [Credits](#credits)).
    egg shape with a narrower jaw on a neck. It works from MoveNet's 17 keypoints (hands and feet
    are inferred from the forearm and shin) and uses MediaPipe's hand and foot points when it has
    them. A spring-damped rig smooths the joints, with a little follow-through at the hands, feet
-   and head, so the body moves fluidly and briefly lost joints don't make it flicker. A soft-body deformer
+   and head, so the body moves fluidly and briefly lost joints don't make it flicker. Its springs
+   are solved exactly each frame, so they stay steady however slowly the page draws. A soft-body deformer
    (also in `js/body-model.js`) then bends, stretches and squashes the fitted body according to
    how hard each part is accelerating (strongest in *Animator sketch*, gentler in *Pencil
    sketch* and *Origami pleats*). A **Body bend** slider under the controls (shown for those three
@@ -590,7 +591,10 @@ npm run build:test-model   # clones dance-ai-research-project, writes test-resul
   fast swing bends the moving limb, scaled by strength; it springs back; teleports don't smear).
 - **Browser tests** (`tests/browser/`) serve the working tree to headless Chromium. They check
   that every overlay style draws over the camera feed and on its own background, under a
-  per-frame time limit (`KINESPHERE_MAX_FRAME_MS`, default 250 ms), and the help panel and style
+  per-frame time limit (`KINESPHERE_MAX_FRAME_MS`, default 250 ms), and that every style copes
+  with the poses a camera gives when someone is partly out of frame or the tracking glitches
+  (walking up to the camera, flickering visibility, a collapsed torso, all joints on one point,
+  a joint jumping away) at 60, 30 and 15 frames a second; and the help panel and style
   gallery (including at phone width). On the dashboard they check the kinesphere figures, value
   toggles, hiding the explanations, the replay overlay, exports, the floor plot, IndexedDB storage
   (including a 15-minute session) and comparing dancers. On the live view, with Chromium's fake
@@ -602,7 +606,8 @@ npm run build:test-model   # clones dance-ai-research-project, writes test-resul
   each bundled model (Altlando and Bailando) loads and gives exactly what onnxruntime gives, and
   replies to a dancer with human bone lengths; that Altlando is the default and Bailando can be
   chosen and is remembered; then
-  they dance with the partner, record it, stop and restart it, load model files chosen from disk,
+  they dance with the partner (including a dancer drifting out of frame on a slowed-down CPU, in
+  the fitted-body styles), record it, stop and restart it, load model files chosen from disk,
   report a folder without a model and export a dancer for Altlando. Unit tests cover the pose conversions
   to and from SMPL joints (bone lengths, left and right, y up), resampling to 60 fps and the
   reply scheduling (when it asks, cross-fades, errors and back-off).

@@ -32,20 +32,23 @@ export function createRig() {
   for (const i of CORE.filter(i => i !== 0)) omega[i] = 2 * Math.PI * 7;
   return {
     update(p, dt, minVis = 0.5) {
-      const step = Math.min(Math.max(dt, 0), 0.05);
+      const step = Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.05) : 0;
       for (let i = 0; i < n; i++) {
-        const seen = p.v[i] >= minVis && Number.isFinite(p.x[i]);
+        const seen = p.v[i] >= minVis && Number.isFinite(p.x[i]) && Number.isFinite(p.y[i]);
         if (!seen) {
           lost[i] += step;
           if (lost[i] > HOLD_S) v[i] = 0;
           continue;
         }
-        if (lost[i] > HOLD_S) { x[i] = p.x[i]; y[i] = p.y[i]; vx[i] = 0; vy[i] = 0; } // (re)appeared: snap
+        if (lost[i] > HOLD_S || !Number.isFinite(x[i] + y[i] + vx[i] + vy[i])) { x[i] = p.x[i]; y[i] = p.y[i]; vx[i] = 0; vy[i] = 0; } // (re)appeared: snap
         else {
-          const w = omega[i];
-          vx[i] += (w * w * (p.x[i] - x[i]) - 2 * w * vx[i]) * step;
-          vy[i] += (w * w * (p.y[i] - y[i]) - 2 * w * vy[i]) * step;
-          x[i] += vx[i] * step; y[i] += vy[i] * step;
+          // the exact motion of a critically damped spring over the step, towards the new position.
+          // (Stepping it with Euler steps is unstable when omega * dt > ~0.8: at 30 frames a second
+          // the stiff torso springs would swing ever wider, to infinity.)
+          const w = omega[i], ex = Math.exp(-w * step);
+          const eX = x[i] - p.x[i], cX = vx[i] + w * eX, eY = y[i] - p.y[i], cY = vy[i] + w * eY;
+          x[i] = p.x[i] + (eX + cX * step) * ex; vx[i] = (vx[i] - w * cX * step) * ex;
+          y[i] = p.y[i] + (eY + cY * step) * ex; vy[i] = (vy[i] - w * cY * step) * ex;
         }
         lost[i] = 0;
         v[i] = p.v[i];
