@@ -80,6 +80,7 @@ for (const [name, folder, check] of [['Altlando', 'models/altlando/', /Altlando/
       return { model: info.manifest.model, vocab: info.manifest.vocabUp, n: frames.length, codesUp: frames.codesUp, codesDown: frames.codesDown, raw: Array.from(frames.raw), thigh: bones.map(b => b[4]), shin: bones.map(b => b[7]) };
     }, { base: `/${folder}`, payload: ref.payload, human: humanInput() });
     assert.match(out.model, check);
+    assert.equal(out.model.replace(/ \(.*$/, ''), name.split(' ')[0], 'the name over the partner\'s head');
     assert.equal(out.vocab, name === 'Altlando' ? 2048 : 512);
     assert.equal(out.n, 448);
     assert.deepEqual(out.codesUp, ref.codesUp);
@@ -102,6 +103,9 @@ test('Altlando is the default model, and Bailando can be chosen', async () => {
   await p2.goto(new URL('/', page.url()).href, { waitUntil: 'networkidle' });
   await p2.evaluate(() => { document.querySelector('#ai-panel').hidden = false; document.querySelector('.ai-advanced').open = true; });
   assert.equal(await p2.$eval('#ai-choice', s => s.value), 'altlando');
+  const links = await p2.$$eval('#ai-panel a[href]', a => a.map(x => x.href));
+  assert.ok(links.includes('https://hdl.handle.net/2292/74331'), "links to Jay Zhou's thesis");
+  assert.ok(links.includes('https://arxiv.org/abs/2203.13055'), 'links to the Bailando paper');
   assert.equal(await p2.inputValue('#ai-model'), 'models/altlando/');
   await p2.selectOption('#ai-choice', 'bailando');
   assert.equal(await p2.inputValue('#ai-model'), 'models/bailando/');
@@ -143,7 +147,7 @@ test('the AI partner button starts it: it watches for 3.7 s, then dances a reply
     return r && { name: r.name, lane: r.lane, age: performance.now() - r.at, poses: r.poses.length };
   });
   assert.ok(partner, 'the partner is drawn as a dancer');
-  assert.equal(partner.name, 'AI partner');
+  assert.equal(partner.name, 'Altlando architecture', 'named after its model (the test model\'s manifest says "Altlando architecture (random weights, for testing)")');
   assert.ok(partner.age < 500 && partner.poses === 1);
   assert.ok(partner.lane > 0 && partner.lane < 1, `lane ${partner.lane}`);
 });
@@ -197,7 +201,7 @@ test('the AI partner is recorded with you, and labelled in the dashboard', async
   await page.waitForSelector('#view-dashboard:not([hidden]) #session-name', { timeout: 30000 });
   const tabs = await page.$$eval('#view-dashboard .tab[data-person]', t => t.map(x => x.textContent.trim()));
   assert.equal(tabs.length, 2, tabs.join(' | '));
-  assert.ok(tabs.some(t => t.startsWith('AI partner') && !t.includes('online')), tabs.join(' | '));
+  assert.ok(tabs.some(t => t.startsWith('Altlando architecture') && !t.includes('online')), tabs.join(' | '));
   await page.click('.nav-btn[data-view="live"]');
 });
 

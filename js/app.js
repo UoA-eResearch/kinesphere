@@ -1986,7 +1986,7 @@ function onMpPose(id, poses, aspect, worlds = []) {
   if (!poses) { remotes.delete(id); return; }
   let rem = remotes.get(id);
   if (!rem) {
-    rem = { name: id === AI_ID ? 'AI partner' : state.mp.peers.find(p => p.id === id)?.name ?? 'Dancer', effects: [], smoothers: createSmoother(state.smoother.id, 6), scale: 0, hipY: null, lane: null };
+    rem = { name: id === AI_ID ? aiPartnerName() : state.mp.peers.find(p => p.id === id)?.name ?? 'Dancer', effects: [], smoothers: createSmoother(state.smoother.id, 6), scale: 0, hipY: null, lane: null };
     remotes.set(id, rem);
   }
   rem.poses = poses;
@@ -2239,11 +2239,20 @@ function stopAiPartner({ keepModel = true } = {}) {
   renderAiStatus();
 }
 
+/** The partner's name, over its head and in recordings: its model's ("Altlando", "Bailando"). */
+function aiPartnerName() {
+  const model = ai.model?.loaded?.manifest?.model;
+  return model ? model.replace(/ \(.*$/, '').trim() || 'AI partner' : 'AI partner';
+}
+
 /** Every animation frame: show the partner's current pose (it asks the model when it needs to). */
 function updateAiPartner(now) {
   if (!ai.partner?.active) return;
   const J = ai.partner.frameAt(now);
-  if (J) onMpPose(AI_ID, [landmarksFromSmpl(J)], 16 / 9, [worldFromSmpl(J)]);
+  if (J) {
+    onMpPose(AI_ID, [landmarksFromSmpl(J)], 16 / 9, [worldFromSmpl(J)]);
+    state.mp.remotes.get(AI_ID).name = aiPartnerName(); // the name tag over its head
+  }
   if (now - ai.statusAt > 300) { ai.statusAt = now; renderAiStatus(); }
 }
 
@@ -2256,7 +2265,7 @@ function renderAiStatus() {
   const loaded = ai.model?.loaded;
   const where = loaded ? ` on ${loaded.backend}` : '';
   const testModel = loaded?.manifest?.model?.includes('random') ? ' This is a test model with random weights, so its dancing is meaningless.' : '';
-  const who = loaded?.manifest?.model ? loaded.manifest.model.replace(/ \(.*$/, '') : 'The partner';
+  const who = loaded ? aiPartnerName() : 'The partner';
   let text = 'Off.', error = false;
   if (ai.loadError && !on) {
     text = /no model at|not found/.test(ai.loadError)

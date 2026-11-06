@@ -210,7 +210,9 @@ models are bundled with the site and run **in your browser** with ONNX Runtime W
 through WebGPU when the browser has it, otherwise on the CPU with WebAssembly), in a Web Worker so
 the page stays smooth; nothing is sent anywhere, and no server is needed.
 
-Two models are bundled; **Model** in the panel switches between them (remembered for next time):
+Two models are bundled; **Model** in the panel switches between them (remembered for next time),
+and the panel links to [Jay Zhou's thesis](https://hdl.handle.net/2292/74331) and the
+[Bailando paper](https://arxiv.org/abs/2203.13055):
 
 * **Altlando** (the default) is the model from Jiazhi (Jay) Zhou's thesis, *Interactive AI Dancer*
   (University of Auckland, 2025): Bailando retrained **without music**, so it answers movement
@@ -241,16 +243,12 @@ running a GPT without the music it was trained with. The comparison below gives 
   likely code each time, as Bailando and Altlando do); the VQ-VAE decodes them back to joints. The partner
   then dances that reply, cross-fading from one reply into the next, and asks for the next reply
   before the current one runs out, so it keeps answering what you did most recently.
-* **On screen** the partner is drawn like an online dancer: in its own lane beside you, scaled to
-  your size, in the overlay style you chose, with an *AI partner* name tag. It is **recorded** with
-  you (as a person called *AI partner*, with 3D joints), so the dashboard analyses its dancing and
-  can compare it with yours.
 * **Show the model's reading of my movement** also plays the first half of each reply: the model
   re-reading your last 3.7 s through its pose vocabulary (the "mimicry" phase in the thesis).
 * **On screen** the partner is drawn like an online dancer: in its own lane beside you, scaled to
-  your size, in the overlay style you chose, with an *AI partner* name tag. It is **recorded** with
-  you (as a person called *AI partner*, with 3D joints), so the dashboard analyses its dancing and
-  can compare it with yours.
+  your size, in the overlay style you chose, with its model's name (*Altlando* or *Bailando*) over
+  its head. It is **recorded** with you (as a person with that name, with 3D joints), so the
+  dashboard analyses its dancing and can compare it with yours.
 * **Show the model's reading of my movement** also plays the first half of each reply: the model
   re-reading your last 3.7 s through its pose vocabulary (the "mimicry" phase in the thesis).
 * **Speed.** Each model has about 150–160 million weights (Altlando 185 MB, Bailando 160 MB,
