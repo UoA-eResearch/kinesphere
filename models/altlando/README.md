@@ -4,7 +4,7 @@ The 🤖 AI partner loads its default model from this folder: `altlando.json` pl
 `gpt.onnx` and `decoder.onnx`, with big files split into `.part0`, `.part1`, … of at most 40 MB
 (GitHub refuses files over 100 MB; the browser joins them again).
 
-**What it is:** Altlando, from Jiazhi (Jay) Zhou, *Interactive AI Dancer* (University of Auckland,
+**What it is:** Altlando, from Jiazhi Zhou, *Interactive AI Dancer* (University of Auckland,
 2025): Bailando with the music condition removed from the GPT, 2048 pose codes for each half of the
 body, trained on AIST++, FineDance and the CMU motion capture database. These are the research
 team's trained weights, `vqvae_lb.pt` (VQ-VAE, epoch 500) and `gpt_lb.pt` (GPT, epoch 180), run

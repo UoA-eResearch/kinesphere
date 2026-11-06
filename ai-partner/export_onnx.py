@@ -7,7 +7,7 @@ the GPT, 2048-code vocabularies and more training data. Its code lives in dance-
 (src/bailandopp/app/models_v1). This script builds the networks from that code and either
 
   --bailando   loads the ORIGINAL Bailando weights (AIST++, 512 codes; public, S-Lab License) into
-               Altlando's music-free GPT: Jay's fix applied to the released model, without retraining
+               Altlando's music-free GPT: Jiazhi Zhou's fix applied to the released model, without retraining
                (the music projection is dropped and the position table keeps its upper- and
                lower-body thirds; every other weight carries over unchanged), or
   --vqvae/--gpt  loads trained Altlando checkpoints,
@@ -144,7 +144,7 @@ def strip_module(state):
 
 def bailando_gpt_without_music(state, block):
     """
-    Jay's fix (Altlando), applied to the original Bailando GPT's weights: the music tokens are taken
+    Jiazhi Zhou's fix (Altlando), applied to the original Bailando GPT's weights: the music tokens are taken
     out of the sequence, so the attention input goes from B x (3T) x C (music, upper, lower body) to
     B x (2T) x C. The music projection (cond_emb) goes, and the position table keeps the positions of
     the upper- and lower-body tokens (rows block..2*block and 2*block..3*block); the attention, MLP and

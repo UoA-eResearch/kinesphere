@@ -211,10 +211,10 @@ through WebGPU when the browser has it, otherwise on the CPU with WebAssembly), 
 the page stays smooth; nothing is sent anywhere, and no server is needed.
 
 Two models are bundled; **Model** in the panel switches between them (remembered for next time),
-and the panel links to [Jay Zhou's thesis](https://hdl.handle.net/2292/74331) and the
+and the panel links to [Jiazhi Zhou's thesis](https://hdl.handle.net/2292/74331) and the
 [Bailando paper](https://arxiv.org/abs/2203.13055):
 
-* **Altlando** (the default) is the model from Jiazhi (Jay) Zhou's thesis, *Interactive AI Dancer*
+* **Altlando** (the default) is the model from Jiazhi Zhou's thesis, *Interactive AI Dancer*
   (University of Auckland, 2025): Bailando retrained **without music**, so it answers movement
   alone, with 2048-pose vocabularies and more varied training data (AIST++ and FineDance dance plus
   the CMU motion capture database of everyday movement). These are the research team's trained

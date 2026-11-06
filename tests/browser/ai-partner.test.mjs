@@ -104,7 +104,7 @@ test('Altlando is the default model, and Bailando can be chosen', async () => {
   await p2.evaluate(() => { document.querySelector('#ai-panel').hidden = false; document.querySelector('.ai-advanced').open = true; });
   assert.equal(await p2.$eval('#ai-choice', s => s.value), 'altlando');
   const links = await p2.$$eval('#ai-panel a[href]', a => a.map(x => x.href));
-  assert.ok(links.includes('https://hdl.handle.net/2292/74331'), "links to Jay Zhou's thesis");
+  assert.ok(links.includes('https://hdl.handle.net/2292/74331'), "links to Jiazhi Zhou's thesis");
   assert.ok(links.includes('https://arxiv.org/abs/2203.13055'), 'links to the Bailando paper');
   assert.equal(await p2.inputValue('#ai-model'), 'models/altlando/');
   await p2.selectOption('#ai-choice', 'bailando');

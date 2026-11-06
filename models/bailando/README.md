@@ -7,7 +7,7 @@ When **Bailando** is chosen as the 🤖 AI partner's model, it loads from this f
 **What it is:** Bailando (Siyao et al., CVPR 2022) with its original released weights (trained on
 AIST++: the VQ-VAE `sep_vqvae_root` epoch 500 and the GPT `cc_motion_gpt` epoch 400 from the
 `experiments.zip` linked in [Bailando's README](https://github.com/lisiyao21/Bailando)), with the
-music condition removed from the GPT as in Jay Zhou's Altlando: the music projection is dropped and
+music condition removed from the GPT as in Jiazhi Zhou's Altlando: the music projection is dropped and
 the position table keeps its upper- and lower-body rows; every other weight is unchanged. The
 weights are stored as 8-bit integers with a per-channel scale (the arithmetic is 32-bit float).
 
